@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DataAnalysis, Document, Grid, List, Monitor, Setting, SwitchButton, UserFilled } from '@element-plus/icons-vue';
+import { DataAnalysis, Grid, List, Monitor, Setting, SwitchButton, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -41,7 +41,7 @@ onMounted(boot);
     <aside class="sidebar">
       <div class="brand">
         <el-icon><Grid /></el-icon>
-        <span>时间管理系统</span>
+        <span>任务管理系统</span>
       </div>
       <el-menu :default-active="active" router class="nav-menu">
         <el-menu-item index="/dashboard">
@@ -76,6 +76,7 @@ onMounted(boot);
           <span>{{ user?.displayName }}</span>
           <el-tag size="small">{{ user?.role }}</el-tag>
           <el-tag size="small" type="info">{{ user?.platform === 'feishu' ? '飞书' : '钉钉' }}</el-tag>
+          <el-tag v-if="user?.provider" size="small" type="success">{{ user.provider === 'local' ? '本地' : '企业登录' }}</el-tag>
           <el-button :icon="SwitchButton" circle @click="logout" />
         </div>
       </header>

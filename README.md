@@ -1,6 +1,6 @@
 # TimeManageSystem
 
-时间管理系统。前端使用 Vue 3 + Vite + Element Plus + ECharts，后端使用 Node.js + Express + TypeScript，钉钉表格作为主数据源，SQLite 保存账号、权限和审计日志。
+任务管理系统。前端使用 Vue 3 + Vite + Element Plus + ECharts，后端使用 Node.js + Express + TypeScript，钉钉表格作为主数据源，SQLite 保存账号、权限和审计日志。
 
 ## 启动
 

@@ -3,12 +3,36 @@ import fs from 'fs';
 import path from 'path';
 import initSqlJs, { Database } from 'sql.js';
 
+export type UserRole = 'admin' | 'editor' | 'viewer';
+export type IdentityProvider = 'dingtalk' | 'feishu';
+
 export interface UserRecord {
   id: number;
   username: string;
-  password_hash: string;
-  role: 'admin' | 'editor' | 'viewer';
+  password_hash?: string | null;
+  role: UserRole;
   display_name: string;
+  enabled: number;
+  created_at: string;
+  updated_at?: string;
+  default_data_source_id?: number | null;
+  default_data_source_name?: string | null;
+}
+
+export interface UserIdentityRecord {
+  id: number;
+  user_id: number;
+  provider: IdentityProvider;
+  provider_user_id: string;
+  union_id?: string;
+  open_id?: string;
+  name?: string;
+  avatar?: string;
+  mobile?: string;
+  email?: string;
+  raw_json?: string;
+  created_at: string;
+  updated_at?: string;
 }
 
 const dbPath = path.resolve(process.cwd(), 'server-data.db');
@@ -41,6 +65,17 @@ export async function all<T>(sql: string, params: unknown[] = []) {
   return rows;
 }
 
+async function hasColumn(table: string, column: string) {
+  const rows = await all<{ name: string }>(`PRAGMA table_info(${table})`);
+  return rows.some((row) => row.name === column);
+}
+
+async function ensureColumn(table: string, column: string, definition: string) {
+  if (!(await hasColumn(table, column))) {
+    run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
 export async function initDatabase() {
   const SQL = await initSqlJs();
   db = fs.existsSync(dbPath) ? new SQL.Database(fs.readFileSync(dbPath)) : new SQL.Database();
@@ -49,10 +84,35 @@ export async function initDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      password_hash TEXT,
       role TEXT NOT NULL,
       display_name TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await ensureColumn('users', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'updated_at', 'TEXT');
+  run("UPDATE users SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)");
+
+  run(`
+    CREATE TABLE IF NOT EXISTS user_identities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      union_id TEXT,
+      open_id TEXT,
+      name TEXT,
+      avatar TEXT,
+      mobile TEXT,
+      email TEXT,
+      raw_json TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(provider, provider_user_id)
     )
   `);
 
@@ -135,11 +195,12 @@ export async function initDatabase() {
     ];
 
     for (const [username, password, role, displayName] of users) {
-      run('INSERT INTO users (username, password_hash, role, display_name) VALUES (?, ?, ?, ?)', [
+      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
         username,
         bcrypt.hashSync(password, 10),
         role,
-        displayName
+        displayName,
+        1
       ]);
     }
   }
@@ -155,7 +216,8 @@ async function seedConfigTables() {
       appSecret: process.env.DINGTALK_APP_SECRET || '',
       workbookId: process.env.DINGTALK_WORKBOOK_ID || '',
       operatorId: process.env.DINGTALK_OPERATOR_ID || '',
-      baseUrl: process.env.DINGTALK_API_BASE_URL || 'https://api.dingtalk.com'
+      baseUrl: process.env.DINGTALK_API_BASE_URL || 'https://api.dingtalk.com',
+      loginEnabled: 'true'
     };
     run('INSERT INTO data_source_instances (name, platform, config_json, enabled, sort_order) VALUES (?, ?, ?, ?, ?)', [
       '钉钉-项目管理表',
@@ -221,6 +283,133 @@ async function seedConfigTables() {
 
 export async function findUserByUsername(username: string) {
   return get<UserRecord>('SELECT * FROM users WHERE username = ?', [username]);
+}
+
+export async function findUserById(id: number) {
+  return get<UserRecord>('SELECT * FROM users WHERE id = ?', [id]);
+}
+
+export async function listUsers() {
+  return all<UserRecord>(`
+    SELECT
+      u.*,
+      p.data_source_id as default_data_source_id,
+      d.name as default_data_source_name
+    FROM users u
+    LEFT JOIN user_data_source_preferences p ON p.user_id = u.id
+    LEFT JOIN data_source_instances d ON d.id = p.data_source_id
+    ORDER BY u.id DESC
+  `);
+}
+
+export async function updateUser(input: { id: number; displayName: string; role: UserRole; enabled: boolean; defaultDataSourceId?: number | null }) {
+  run('UPDATE users SET display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+    input.displayName,
+    input.role,
+    input.enabled ? 1 : 0,
+    input.id
+  ]);
+  if (input.defaultDataSourceId) {
+    run(
+      `INSERT INTO user_data_source_preferences (user_id, data_source_id, platform, updated_at)
+       SELECT ?, id, platform, CURRENT_TIMESTAMP FROM data_source_instances WHERE id = ?
+       ON CONFLICT(user_id) DO UPDATE SET
+         data_source_id = excluded.data_source_id,
+         platform = excluded.platform,
+         updated_at = CURRENT_TIMESTAMP`,
+      [input.id, input.defaultDataSourceId]
+    );
+  } else {
+    run('DELETE FROM user_data_source_preferences WHERE user_id = ?', [input.id]);
+  }
+  return findUserById(input.id);
+}
+
+export async function getUserDataSourcePreference(userId: number) {
+  return get<{ data_source_id: number; platform?: string }>(
+    'SELECT data_source_id, platform FROM user_data_source_preferences WHERE user_id = ?',
+    [userId]
+  );
+}
+
+export async function findIdentity(provider: IdentityProvider, providerUserId: string) {
+  return get<UserIdentityRecord>('SELECT * FROM user_identities WHERE provider = ? AND provider_user_id = ?', [provider, providerUserId]);
+}
+
+export async function upsertOAuthUser(input: {
+  provider: IdentityProvider;
+  providerUserId: string;
+  unionId?: string;
+  openId?: string;
+  name?: string;
+  avatar?: string;
+  mobile?: string;
+  email?: string;
+  raw?: unknown;
+}) {
+  const identity = await findIdentity(input.provider, input.providerUserId);
+  if (identity) {
+    let linkedUser = await findUserById(identity.user_id);
+    if (!linkedUser) {
+      const repairedUsername = `${input.provider}_${input.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
+      linkedUser = await findUserByUsername(repairedUsername);
+      if (linkedUser) {
+        run('UPDATE user_identities SET user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [linkedUser.id, identity.id]);
+      }
+    }
+    run(
+      'UPDATE user_identities SET union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [
+        input.unionId || null,
+        input.openId || null,
+        input.name || null,
+        input.avatar || null,
+        input.mobile || null,
+        input.email || null,
+        input.raw ? JSON.stringify(input.raw) : null,
+        identity.id
+      ]
+    );
+    return linkedUser || findUserById(identity.user_id);
+  }
+
+  const baseUsername = `${input.provider}_${input.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
+  let username = baseUsername;
+  let suffix = 1;
+  while (await findUserByUsername(username)) {
+    username = `${baseUsername}_${suffix}`;
+    suffix += 1;
+  }
+
+  try {
+    run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+      username,
+      null,
+      'viewer',
+      input.name || username,
+      1
+    ]);
+    const createdUser = await findUserByUsername(username);
+    if (!createdUser) throw new Error('新用户写入后未找到');
+    run(
+      'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        createdUser.id,
+        input.provider,
+        input.providerUserId,
+        input.unionId || null,
+        input.openId || null,
+        input.name || null,
+        input.avatar || null,
+        input.mobile || null,
+        input.email || null,
+        input.raw ? JSON.stringify(input.raw) : null
+      ]
+    );
+    return createdUser;
+  } catch (error: any) {
+    throw new Error(`创建用户失败：${error.message || error}`);
+  }
 }
 
 export async function addAuditLog(input: {

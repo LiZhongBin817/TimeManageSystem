@@ -9,3 +9,4 @@ npm-debug.log*
 # 忽略dev运行日志
 *-dev.err.log
 *-dev.out.log
+server-start*.log

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { DataSourceInstance, DataSourcePlatform, ModuleConfig, ModuleField, PlatformKey, SheetRow, User } from './types';
+import type { DataSourceInstance, DataSourcePlatform, ManagedUser, ModuleConfig, ModuleField, PlatformKey, SheetRow, User } from './types';
 
 const TOKEN_KEY = 'tms-token';
 
@@ -39,6 +39,15 @@ export function clearToken() {
 export async function login(username: string, password: string, dataSourceId: number) {
   const { data } = await api.post<{ token: string; user: User }>('/auth/login', { username, password, dataSourceId });
   setToken(data.token);
+  return data;
+}
+
+export function oauthStartUrl(provider: PlatformKey, dataSourceId: number) {
+  return `/api/auth/oauth/${provider}/start?dataSourceId=${encodeURIComponent(dataSourceId)}`;
+}
+
+export async function getLoginConfig() {
+  const { data } = await api.get<{ providers: Array<{ key: PlatformKey; label: string }>; localLoginEnabled: boolean }>('/auth/login-config');
   return data;
 }
 
@@ -157,4 +166,14 @@ export async function deleteProjectRow(moduleKey: string, rowId: string) {
 export async function getAuditLogs() {
   const { data } = await api.get('/audit-logs');
   return data.logs;
+}
+
+export async function getUsers() {
+  const { data } = await api.get<{ users: ManagedUser[] }>('/users');
+  return data.users;
+}
+
+export async function updateManagedUser(user: Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'enabled' | 'defaultDataSourceId'>) {
+  const { data } = await api.put<{ user: ManagedUser }>(`/users/${user.id}`, user);
+  return data.user;
 }

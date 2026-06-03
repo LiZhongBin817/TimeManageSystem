@@ -4,6 +4,7 @@ import AppShell from './views/AppShell.vue';
 import DashboardView from './views/DashboardView.vue';
 import LoginView from './views/LoginView.vue';
 import ModuleView from './views/ModuleView.vue';
+import OAuthCallbackView from './views/OAuthCallbackView.vue';
 import ProjectModulesView from './views/ProjectModulesView.vue';
 import SettingsView from './views/SettingsView.vue';
 
@@ -11,6 +12,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: LoginView },
+    { path: '/oauth/callback', component: OAuthCallbackView },
     {
       path: '/',
       component: AppShell,
@@ -26,7 +28,7 @@ export const router = createRouter({
 });
 
 router.beforeEach((to) => {
-  if (to.path !== '/login' && !getToken()) {
+  if (!['/login', '/oauth/callback'].includes(to.path) && !getToken()) {
     return '/login';
   }
   if (to.path === '/login' && getToken()) {

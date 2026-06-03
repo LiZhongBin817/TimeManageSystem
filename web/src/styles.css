@@ -62,6 +62,10 @@ body {
   font-size: 12px;
 }
 
+.local-login-collapse {
+  margin-top: 18px;
+}
+
 .app-layout {
   min-height: 100vh;
   display: grid;

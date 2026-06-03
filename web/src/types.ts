@@ -11,6 +11,19 @@ export interface User {
   dataSourceId: number;
   platform: PlatformKey;
   dataSourceName: string;
+  provider?: PlatformKey | 'local';
+}
+
+export interface ManagedUser {
+  id: number;
+  username: string;
+  displayName: string;
+  role: Role;
+  enabled: boolean;
+  defaultDataSourceId?: number | null;
+  defaultDataSourceName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface DataSourcePlatform {
