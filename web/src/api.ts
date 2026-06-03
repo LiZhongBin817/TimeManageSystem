@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ModuleConfig, SheetRow, User } from './types';
+import type { DataSourceInstance, DataSourcePlatform, ModuleConfig, ModuleField, PlatformKey, SheetRow, User } from './types';
 
 const TOKEN_KEY = 'tms-token';
 
@@ -36,8 +36,8 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function login(username: string, password: string) {
-  const { data } = await api.post<{ token: string; user: User }>('/auth/login', { username, password });
+export async function login(username: string, password: string, dataSourceId: number) {
+  const { data } = await api.post<{ token: string; user: User }>('/auth/login', { username, password, dataSourceId });
   setToken(data.token);
   return data;
 }
@@ -47,9 +47,63 @@ export async function getMe() {
   return data.user;
 }
 
+export async function getDataSourcePlatforms() {
+  const { data } = await api.get<{ platforms: DataSourcePlatform[] }>('/data-source/platforms');
+  return data.platforms;
+}
+
+export async function getDataSourceInstances(platform?: PlatformKey, includeDisabled = false) {
+  const { data } = await api.get<{ instances: DataSourceInstance[] }>('/data-source/instances', {
+    params: { platform, includeDisabled }
+  });
+  return data.instances;
+}
+
+export async function saveDataSourceInstance(instance: DataSourceInstance) {
+  const { data } = instance.id
+    ? await api.put<{ instance: DataSourceInstance }>(`/data-source/instances/${instance.id}`, instance)
+    : await api.post<{ instance: DataSourceInstance }>('/data-source/instances', instance);
+  return data.instance;
+}
+
+export async function deleteDataSourceInstance(id: number) {
+  await api.delete(`/data-source/instances/${id}`);
+}
+
 export async function getModules() {
   const { data } = await api.get<{ modules: ModuleConfig[] }>('/modules');
   return data.modules;
+}
+
+export async function getProjectModules() {
+  const { data } = await api.get<{ modules: ModuleConfig[] }>('/project-modules');
+  return data.modules;
+}
+
+export async function getConfigModules() {
+  const { data } = await api.get<{ modules: ModuleConfig[] }>('/config/modules');
+  return data.modules;
+}
+
+export async function saveConfigModule(module: ModuleConfig) {
+  const { data } = module.id
+    ? await api.put<{ module: ModuleConfig }>(`/config/modules/${module.id}`, module)
+    : await api.post<{ module: ModuleConfig }>('/config/modules', module);
+  return data.module;
+}
+
+export async function deleteConfigModule(id: number) {
+  await api.delete(`/config/modules/${id}`);
+}
+
+export async function syncConfigModule(id: number) {
+  const { data } = await api.post(`/config/modules/${id}/sync`);
+  return data;
+}
+
+export async function saveModuleFields(moduleId: number, fields: ModuleField[]) {
+  const { data } = await api.put<{ module: ModuleConfig }>(`/config/modules/${moduleId}/fields`, { fields });
+  return data.module;
 }
 
 export async function getSummary() {
@@ -59,6 +113,11 @@ export async function getSummary() {
 
 export async function getRows(moduleKey: string) {
   const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
+  return data;
+}
+
+export async function getProjectRows(moduleKey: string) {
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
   return data;
 }
 
@@ -72,13 +131,27 @@ export async function createRow(moduleKey: string, payload: Record<string, unkno
   return data.row;
 }
 
+export async function createProjectRow(moduleKey: string, payload: Record<string, unknown>) {
+  const { data } = await api.post<{ row: SheetRow }>(`/project-modules/${moduleKey}/rows`, payload);
+  return data.row;
+}
+
 export async function updateRow(moduleKey: string, rowId: string, payload: Record<string, unknown>) {
   const { data } = await api.put<{ row: SheetRow }>(`/sheets/${moduleKey}/rows/${rowId}`, payload);
   return data.row;
 }
 
+export async function updateProjectRow(moduleKey: string, rowId: string, payload: Record<string, unknown>) {
+  const { data } = await api.put<{ row: SheetRow }>(`/project-modules/${moduleKey}/rows/${rowId}`, payload);
+  return data.row;
+}
+
 export async function deleteRow(moduleKey: string, rowId: string) {
   await api.delete(`/sheets/${moduleKey}/rows/${rowId}`);
+}
+
+export async function deleteProjectRow(moduleKey: string, rowId: string) {
+  await api.delete(`/project-modules/${moduleKey}/rows/${rowId}`);
 }
 
 export async function getAuditLogs() {

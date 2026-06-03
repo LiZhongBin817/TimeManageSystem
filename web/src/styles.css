@@ -125,6 +125,14 @@ body {
   width: 280px;
 }
 
+.module-select {
+  width: 230px;
+}
+
+.project-toolbar {
+  justify-content: space-between;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
@@ -214,6 +222,152 @@ body {
   margin-bottom: 16px;
 }
 
+.dashboard-focus-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(360px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.focus-card {
+  min-height: 360px;
+  padding: 18px;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.focus-card.developing {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.focus-card.testing {
+  border-color: #fed7aa;
+  background: #fffaf5;
+}
+
+.focus-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.focus-card header span {
+  color: #64748b;
+}
+
+.focus-card header strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 42px;
+  line-height: 1;
+}
+
+.schedule-list {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.schedule-item {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.schedule-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-main strong {
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.schedule-main span {
+  color: #64748b;
+}
+
+.schedule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 8px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.schedule-dates {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.schedule-dates div {
+  padding: 9px;
+  border-radius: 6px;
+  background: #f5f7fa;
+}
+
+.schedule-dates span,
+.compact-kpi-grid span,
+.module-status-metrics span {
+  display: block;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.schedule-dates b {
+  display: block;
+  margin-top: 3px;
+  color: #172033;
+  font-size: 14px;
+}
+
+.empty-line {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  color: #94a3b8;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.compact-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.compact-kpi-grid article {
+  padding: 16px;
+  border: 1px solid #dbe2ea;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.compact-kpi-grid strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 28px;
+}
+
+.compact-kpi-grid small {
+  color: #64748b;
+  font-weight: 600;
+}
+
 .kpi-card,
 .module-card,
 .dashboard-section {
@@ -261,6 +415,11 @@ body {
   margin-top: 14px;
   border-radius: 999px;
   background: #e5eaf1;
+}
+
+.progress-track.compact {
+  height: 7px;
+  margin-top: 8px;
 }
 
 .progress-fill {
@@ -439,6 +598,153 @@ body {
   min-width: 72px;
 }
 
+.developer-chart {
+  display: grid;
+  gap: 12px;
+}
+
+.developer-bar-row {
+  display: grid;
+  grid-template-columns: 150px minmax(240px, 1fr) 210px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.developer-name strong,
+.developer-name span {
+  display: block;
+}
+
+.developer-name span {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.developer-bar-wrap {
+  min-width: 0;
+  height: 18px;
+  border-radius: 999px;
+  background: #e5eaf1;
+}
+
+.developer-total-bar {
+  display: flex;
+  min-width: 42px;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.developer-segment.done {
+  background: #2563eb;
+}
+
+.developer-segment.unfinished {
+  background: #ef4444;
+}
+
+.developer-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.done-dot::before,
+.unfinished-dot::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 999px;
+}
+
+.done-dot::before {
+  background: #2563eb;
+}
+
+.unfinished-dot::before {
+  background: #ef4444;
+}
+
+.module-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.module-status-card {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.module-status-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.module-status-card header span {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.module-status-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.module-status-metrics div {
+  padding: 8px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.module-status-metrics b {
+  display: block;
+  margin-top: 3px;
+  color: #0f172a;
+}
+
+.settings-page .panel {
+  min-height: calc(100vh - 150px);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 4px 14px;
+}
+
+.field-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0;
+}
+
+.field-table {
+  margin-top: 8px;
+}
+
 @media (max-width: 900px) {
   .app-layout {
     grid-template-columns: 1fr;
@@ -456,7 +762,11 @@ body {
   }
 
   .metric-grid,
-  .dashboard-grid {
+  .dashboard-grid,
+  .dashboard-focus-grid,
+  .compact-kpi-grid,
+  .module-status-grid,
+  .developer-bar-row {
     grid-template-columns: 1fr;
   }
 

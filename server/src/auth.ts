@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { Role } from './config/modules';
+import { Role, getDataSource } from './config/modules';
 import { findUserByUsername } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
@@ -11,6 +11,9 @@ export interface AuthUser {
   username: string;
   role: Role;
   displayName: string;
+  dataSourceId: number;
+  platform: 'dingtalk' | 'feishu';
+  dataSourceName: string;
 }
 
 declare global {
@@ -21,17 +24,25 @@ declare global {
   }
 }
 
-export async function login(username: string, password: string) {
+export async function login(username: string, password: string, dataSourceId: number) {
   const user = await findUserByUsername(username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return null;
+  }
+
+  const dataSource = await getDataSource(dataSourceId);
+  if (!dataSource || !dataSource.enabled) {
+    throw new Error('请选择可用的数据源实例');
   }
 
   const payload: AuthUser = {
     id: user.id,
     username: user.username,
     role: user.role,
-    displayName: user.display_name
+    displayName: user.display_name,
+    dataSourceId: dataSource.id,
+    platform: dataSource.platform,
+    dataSourceName: dataSource.name
   };
 
   return {

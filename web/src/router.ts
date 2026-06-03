@@ -4,6 +4,8 @@ import AppShell from './views/AppShell.vue';
 import DashboardView from './views/DashboardView.vue';
 import LoginView from './views/LoginView.vue';
 import ModuleView from './views/ModuleView.vue';
+import ProjectModulesView from './views/ProjectModulesView.vue';
+import SettingsView from './views/SettingsView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -15,7 +17,9 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', component: DashboardView },
-        { path: 'modules/:moduleKey', component: ModuleView, props: true }
+        { path: 'project-modules', component: ProjectModulesView },
+        { path: 'modules/:moduleKey', component: ModuleView, props: true },
+        { path: 'settings', component: SettingsView }
       ]
     }
   ]

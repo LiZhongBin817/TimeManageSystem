@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { computed, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
-import { createRow, deleteRow, getRows, getStaffOptions, updateRow } from '../api';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import {
+  createProjectRow,
+  deleteProjectRow,
+  getProjectModules,
+  getProjectRows,
+  getStaffOptions,
+  updateProjectRow
+} from '../api';
 import type { ModuleConfig, ModuleField, SheetRow } from '../types';
 
-const route = useRoute();
 const loading = ref(false);
+const modules = ref<ModuleConfig[]>([]);
+const selectedKey = ref('');
 const moduleConfig = ref<ModuleConfig>();
 const canEdit = ref(false);
 const rows = ref<SheetRow[]>([]);
@@ -40,6 +47,11 @@ function fieldOptions(field: ModuleField) {
   return staffOptions.value[field.staffRole];
 }
 
+async function loadModules() {
+  modules.value = await getProjectModules();
+  if (!selectedKey.value && modules.value.length) selectedKey.value = modules.value[0].key;
+}
+
 async function loadStaffOptions() {
   try {
     staffOptions.value = await getStaffOptions();
@@ -48,16 +60,29 @@ async function loadStaffOptions() {
   }
 }
 
-async function load() {
+async function loadRows() {
+  if (!selectedKey.value) return;
   loading.value = true;
   try {
-    const data = await getRows(String(route.params.moduleKey));
+    const data = await getProjectRows(selectedKey.value);
     moduleConfig.value = data.module;
     canEdit.value = data.canEdit;
     rows.value = data.rows;
-    if (data.module.key !== 'staff') await loadStaffOptions();
+    await loadStaffOptions();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '数据加载失败');
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function refreshAll() {
+  loading.value = true;
+  try {
+    await loadModules();
+    await loadRows();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '模块加载失败');
   } finally {
     loading.value = false;
   }
@@ -99,14 +124,14 @@ async function submit() {
   try {
     await ElMessageBox.confirm(editingRow.value ? '确认保存本次修改？' : '确认新增这条数据？', '写入数据源', { type: 'warning' });
     if (editingRow.value) {
-      await updateRow(moduleConfig.value.key, editingRow.value.id, buildPayload());
+      await updateProjectRow(moduleConfig.value.key, editingRow.value.id, buildPayload());
       ElMessage.success('已保存');
     } else {
-      await createRow(moduleConfig.value.key, buildPayload());
+      await createProjectRow(moduleConfig.value.key, buildPayload());
       ElMessage.success('已新增');
     }
     dialogOpen.value = false;
-    load();
+    loadRows();
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '保存失败');
   }
@@ -116,27 +141,32 @@ async function remove(row: SheetRow) {
   if (!moduleConfig.value) return;
   try {
     await ElMessageBox.confirm('确认删除这条数据？外部表格中会清空对应行。', '删除确认', { type: 'warning' });
-    await deleteRow(moduleConfig.value.key, row.id);
+    await deleteProjectRow(moduleConfig.value.key, row.id);
     ElMessage.success('已删除');
-    load();
+    loadRows();
   } catch (error: any) {
     if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '删除失败');
   }
 }
 
-watch(() => route.params.moduleKey, load, { immediate: true });
+watch(selectedKey, loadRows);
+onMounted(refreshAll);
 </script>
 
 <template>
   <main v-loading="loading" class="content">
-    <div class="toolbar">
-      <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前模块数据" clearable />
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
+    <div class="toolbar project-toolbar">
+      <el-select v-model="selectedKey" class="module-select" placeholder="选择子模块" filterable>
+        <el-option v-for="item in modules" :key="item.key" :label="item.title" :value="item.key" />
+      </el-select>
+      <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前子模块数据" clearable />
+      <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
       <el-button v-if="canEdit" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
     </div>
 
     <section class="panel">
-      <el-table :data="filteredRows" height="calc(100vh - 245px)" stripe>
+      <el-empty v-if="!modules.length" description="暂无启用的项目子模块，请到系统配置中新建模块" />
+      <el-table v-else :data="filteredRows" height="calc(100vh - 245px)" stripe>
         <el-table-column v-for="field in moduleConfig?.fields || []" :key="field.key" :prop="field.key" :label="field.label" min-width="150" sortable>
           <template #default="{ row }">
             <el-tag v-if="field.type === 'status'" size="small">{{ row[field.key] || '-' }}</el-tag>

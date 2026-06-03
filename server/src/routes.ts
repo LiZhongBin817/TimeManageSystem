@@ -1,30 +1,103 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { login, requireAuth } from './auth';
-import { canEdit, canRead, findModule, modules } from './config/modules';
-import { all, addAuditLog } from './db';
-import { dingTalkClient } from './dingtalk/client';
+import {
+  ModuleConfig,
+  ModuleField,
+  canConfigure,
+  canEdit,
+  canRead,
+  findModule,
+  listDataSources,
+  listModules,
+  replaceModuleFields,
+  saveDataSource,
+  saveModule,
+  updateModuleSheetId
+} from './config/modules';
+import { addAuditLog, all, run } from './db';
+import { getDataSourceClient, moduleDataSourceId } from './dataSources';
 
 export const router = Router();
 
 const loginSchema = z.object({
   username: z.string().min(1),
-  password: z.string().min(1)
+  password: z.string().min(1),
+  dataSourceId: z.coerce.number().int().positive()
 });
 
-router.post('/auth/login', async (req, res) => {
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ message: '用户名和密码不能为空' });
-    return;
-  }
+const dataSourceSchema = z.object({
+  id: z.number().optional(),
+  name: z.string().min(1),
+  platform: z.enum(['dingtalk', 'feishu']),
+  config: z.record(z.string()).default({}),
+  enabled: z.boolean().default(true),
+  sortOrder: z.number().default(0)
+});
 
-  const result = await login(parsed.data.username, parsed.data.password);
-  if (!result) {
-    res.status(401).json({ message: '用户名或密码错误' });
-    return;
+const moduleSchema = z.object({
+  id: z.number().optional(),
+  key: z.string().min(1),
+  title: z.string().min(1),
+  category: z.enum(['project', 'staff', 'todo']).default('project'),
+  dataSourceId: z.number().optional().nullable(),
+  sheetName: z.string().min(1),
+  sheetId: z.string().optional().nullable(),
+  headerRow: z.number().default(1),
+  dataStartRow: z.number().default(2),
+  editable: z.boolean().default(true),
+  enabled: z.boolean().default(true),
+  sortOrder: z.number().default(0)
+});
+
+const fieldsSchema = z.object({
+  fields: z.array(z.object({
+    key: z.string().min(1),
+    label: z.string().min(1),
+    type: z.enum(['text', 'number', 'date', 'status', 'link', 'staff', 'formula', 'hidden']),
+    required: z.boolean().optional(),
+    hidden: z.boolean().optional(),
+    formula: z.boolean().optional(),
+    staffRole: z.enum(['product', 'tester', 'developer']).optional()
+  }))
+});
+
+router.get('/data-source/platforms', (_req, res) => {
+  res.json({
+    platforms: [
+      { key: 'dingtalk', label: '钉钉' },
+      { key: 'feishu', label: '飞书' }
+    ]
+  });
+});
+
+router.get('/data-source/instances', async (req, res, next) => {
+  try {
+    const includeDisabled = req.query.includeDisabled === 'true';
+    const instances = await listDataSources(String(req.query.platform || '') || undefined, includeDisabled);
+    res.json({ instances });
+  } catch (error) {
+    next(error);
   }
-  res.json(result);
+});
+
+router.post('/auth/login', async (req, res, next) => {
+  try {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '用户名、密码和数据源实例不能为空' });
+      return;
+    }
+
+    const result = await login(parsed.data.username, parsed.data.password, parsed.data.dataSourceId);
+    if (!result) {
+      res.status(401).json({ message: '用户名或密码错误' });
+      return;
+    }
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.use(requireAuth);
@@ -33,26 +106,44 @@ router.get('/me', (req, res) => {
   res.json({ user: req.user });
 });
 
-router.get('/modules', (req, res) => {
-  const role = req.user!.role;
-  res.json({
-    modules: modules
-      .filter((item) => canRead(role, item.key))
-      .map((item) => ({ ...item, canEdit: item.editable && canEdit(role, item.key) }))
-  });
+router.get('/modules', async (req, res, next) => {
+  try {
+    const modules = await listModules({ enabledOnly: true, dataSourceId: req.user!.dataSourceId });
+    res.json({
+      modules: modules
+        .filter((item) => canRead(req.user!.role, item))
+        .map((item) => ({ ...item, canEdit: canEdit(req.user!.role, item) }))
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/project-modules', async (req, res, next) => {
+  try {
+    const modules = await listModules({ category: 'project', enabledOnly: true, dataSourceId: req.user!.dataSourceId });
+    res.json({
+      modules: modules
+        .filter((item) => canRead(req.user!.role, item))
+        .map((item) => ({ ...item, canEdit: canEdit(req.user!.role, item) }))
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/staff-options', async (req, res, next) => {
   try {
-    const staffModule = findModule('staff');
-    if (!staffModule || !canRead(req.user!.role, staffModule.key)) {
+    const staffModule = await findModule('staff');
+    if (!staffModule || !canRead(req.user!.role, staffModule)) {
       res.status(404).json({ message: '人员信息模块不存在或无权访问' });
       return;
     }
 
-    const rows = await dingTalkClient.getRows(staffModule);
+    const client = await getClientForModule(staffModule, req.user!.dataSourceId);
+    const rows = await client.getRows(staffModule);
     const unique = (key: string) =>
-      Array.from(new Set(rows.map((row) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
+      Array.from(new Set(rows.map((row: any) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
 
     res.json({
       product: unique('productOwner'),
@@ -66,7 +157,8 @@ router.get('/staff-options', async (req, res, next) => {
 
 router.get('/dashboard/summary', async (req, res, next) => {
   try {
-    const projectModules = modules.filter((item) => ['power-standard', 'sales-standard', 'crawler', 'province-system'].includes(item.key) && canRead(req.user!.role, item.key));
+    const projectModules = (await listModules({ category: 'project', enabledOnly: true, dataSourceId: req.user!.dataSourceId }))
+      .filter((item) => canRead(req.user!.role, item));
     const moduleStats: Array<{
       key: string;
       title: string;
@@ -79,6 +171,8 @@ router.get('/dashboard/summary', async (req, res, next) => {
       progressText: string;
       developingVersions: string[];
       testingVersions: string[];
+      developingItems: Array<Record<string, unknown>>;
+      testingItems: Array<Record<string, unknown>>;
       error?: string;
       editable: boolean;
     }> = [];
@@ -87,10 +181,27 @@ router.get('/dashboard/summary', async (req, res, next) => {
 
     const isDone = (value: unknown) => ['是', '已完成', '完成', 'true'].includes(String(value || '').trim().toLowerCase());
     const versionName = (row: Record<string, unknown>) => String(row.name || row.content || row.branchName || '').trim();
+    const scheduleItem = (module: ModuleConfig, row: Record<string, unknown>, status: 'developing' | 'testing') => ({
+      id: row.id,
+      moduleKey: module.key,
+      moduleTitle: module.title,
+      status,
+      name: versionName(row) || '-',
+      branchName: row.branchName || '-',
+      content: row.content || '-',
+      zentaoLink: row.zentaoLink || '',
+      developer: row.developer || '-',
+      productOwner: row.productOwner || '-',
+      tester: row.tester || '-',
+      plannedTestAt: row.plannedTestAt || '',
+      actualTestAt: row.actualTestAt || '',
+      launchAt: row.launchAt || '',
+      remark: row.remark || ''
+    });
     const isTesting = (row: Record<string, unknown>) => {
       const name = String(row.name || '').trim();
-      if (name.includes('（测试）') || name.includes('(测试)')) return true;
       if (name.includes('（开发）') || name.includes('(开发)')) return false;
+      if (name.includes('（测试）') || name.includes('(测试)')) return true;
       const text = `${row.content || ''} ${row.remark || ''}`.toLowerCase();
       return text.includes('测试') || text.includes('test');
     };
@@ -106,10 +217,11 @@ router.get('/dashboard/summary', async (req, res, next) => {
     };
 
     for (const module of projectModules) {
-      let rows: Awaited<ReturnType<typeof dingTalkClient.getRows>> = [];
+      let rows: Record<string, unknown>[] = [];
       let error: string | undefined;
       try {
-        rows = await dingTalkClient.getRows(module);
+        const client = await getClientForModule(module, req.user!.dataSourceId);
+        rows = await client.getRows(module);
       } catch (failure: any) {
         error = failure.response?.data?.message || failure.message || '读取失败';
       }
@@ -135,17 +247,20 @@ router.get('/dashboard/summary', async (req, res, next) => {
         progressText: '☆'.repeat(Math.max(1, Math.round(completionRate / 10))),
         developingVersions: developingRows.map(versionName).filter(Boolean),
         testingVersions: testingRows.map(versionName).filter(Boolean),
+        developingItems: developingRows.map((row) => scheduleItem(module, row, 'developing')),
+        testingItems: testingRows.map((row) => scheduleItem(module, row, 'testing')),
         error,
-        editable: module.editable && canEdit(req.user!.role, module.key)
+        editable: canEdit(req.user!.role, module)
       });
-      await new Promise((resolve) => setTimeout(resolve, 150));
     }
 
     const totalRows = moduleStats.reduce((sum, item) => sum + item.total, 0);
     const totalDone = moduleStats.reduce((sum, item) => sum + item.done, 0);
     const overallRate = totalRows ? Math.round((totalDone / totalRows) * 100) : 0;
+    const developingItems = moduleStats.flatMap((item) => item.developingItems);
+    const testingItems = moduleStats.flatMap((item) => item.testingItems);
     res.json({
-      source: dingTalkClient.isConfigured ? 'dingtalk' : 'mock',
+      source: req.user!.platform,
       currentDate: new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' }),
       cards: [
         { label: '项目模块', value: moduleStats.length },
@@ -154,6 +269,13 @@ router.get('/dashboard/summary', async (req, res, next) => {
         { label: '整体完成率', value: `${overallRate}%` }
       ],
       overview: { totalRows, totalDone, overallRate },
+      inProgress: {
+        total: developingItems.length + testingItems.length,
+        developing: developingItems.length,
+        testing: testingItems.length,
+        developingItems,
+        testingItems
+      },
       moduleStats,
       developerStats: Array.from(developerNames).map((name) => ({
         name,
@@ -169,64 +291,188 @@ router.get('/dashboard/summary', async (req, res, next) => {
   }
 });
 
-router.get('/sheets/:module/rows', async (req, res, next) => {
+router.get('/project-modules/:module/rows', getModuleRows);
+router.post('/project-modules/:module/rows', createModuleRow);
+router.put('/project-modules/:module/rows/:rowId', updateModuleRow);
+router.delete('/project-modules/:module/rows/:rowId', deleteModuleRow);
+
+router.get('/sheets/:module/rows', getModuleRows);
+router.post('/sheets/:module/rows', createModuleRow);
+router.put('/sheets/:module/rows/:rowId', updateModuleRow);
+router.delete('/sheets/:module/rows/:rowId', deleteModuleRow);
+
+router.post('/data-source/instances', async (req, res, next) => {
   try {
-    const module = findModule(req.params.module);
-    if (!module || !canRead(req.user!.role, module.key)) {
-      res.status(404).json({ message: '模块不存在或无权访问' });
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
       return;
     }
-
-    const rows = await dingTalkClient.getRows(module);
-    res.json({ module, canEdit: module.editable && canEdit(req.user!.role, module.key), rows });
+    const parsed = dataSourceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '数据源实例配置不完整' });
+      return;
+    }
+    const instance = await saveDataSource(parsed.data);
+    res.status(201).json({ instance });
   } catch (error) {
     next(error);
   }
 });
 
-router.post('/sheets/:module/rows', async (req, res, next) => {
+router.put('/data-source/instances/:id', async (req, res, next) => {
   try {
-    const module = findModule(req.params.module);
-    if (!module || !module.editable || !canEdit(req.user!.role, module.key)) {
-      res.status(403).json({ message: '没有新增权限' });
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
       return;
     }
-
-    const row = await dingTalkClient.createRow(module, req.body);
-    await addAuditLog({ userId: req.user!.id, username: req.user!.username, moduleKey: module.key, action: 'create', rowId: row.id, payload: req.body });
-    res.status(201).json({ row });
+    const parsed = dataSourceSchema.safeParse({ ...req.body, id: Number(req.params.id) });
+    if (!parsed.success) {
+      res.status(400).json({ message: '数据源实例配置不完整' });
+      return;
+    }
+    const instance = await saveDataSource(parsed.data);
+    res.json({ instance });
   } catch (error) {
     next(error);
   }
 });
 
-router.put('/sheets/:module/rows/:rowId', async (req, res, next) => {
+router.delete('/data-source/instances/:id', async (req, res, next) => {
   try {
-    const module = findModule(req.params.module);
-    if (!module || !module.editable || !canEdit(req.user!.role, module.key)) {
-      res.status(403).json({ message: '没有编辑权限' });
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
       return;
     }
-
-    const row = await dingTalkClient.updateRow(module, req.params.rowId, req.body);
-    await addAuditLog({ userId: req.user!.id, username: req.user!.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload: req.body });
-    res.json({ row });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.delete('/sheets/:module/rows/:rowId', async (req, res, next) => {
-  try {
-    const module = findModule(req.params.module);
-    if (!module || !module.editable || !canEdit(req.user!.role, module.key)) {
-      res.status(403).json({ message: '没有删除权限' });
-      return;
-    }
-
-    await dingTalkClient.deleteRow(module, req.params.rowId);
-    await addAuditLog({ userId: req.user!.id, username: req.user!.username, moduleKey: module.key, action: 'delete', rowId: req.params.rowId });
+    run('UPDATE data_source_instances SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [Number(req.params.id)]);
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/config/modules', async (req, res, next) => {
+  try {
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    res.json({ modules });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/config/modules', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    const parsed = moduleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '模块配置不完整' });
+      return;
+    }
+    const module = await saveModule(normalizeModuleInput(parsed.data));
+    if (module && Array.isArray(req.body.fields)) {
+      await replaceModuleFields(module.key, req.body.fields as ModuleField[]);
+    }
+    res.status(201).json({ module: module ? await findModule(module.key) : module });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/config/modules/:id', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    const parsed = moduleSchema.safeParse({ ...req.body, id: Number(req.params.id) });
+    if (!parsed.success) {
+      res.status(400).json({ message: '模块配置不完整' });
+      return;
+    }
+    const module = await saveModule(normalizeModuleInput(parsed.data));
+    if (module && Array.isArray(req.body.fields)) {
+      await replaceModuleFields(module.key, req.body.fields as ModuleField[]);
+    }
+    res.json({ module: module ? await findModule(module.key) : module });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/config/modules/:id', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    run('UPDATE module_configs SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [Number(req.params.id)]);
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/config/modules/:id/sync', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const module = modules.find((item) => item.id === Number(req.params.id));
+    if (!module) {
+      res.status(404).json({ message: '模块不存在' });
+      return;
+    }
+    const client = await getClientForModule(module, req.user!.dataSourceId) as any;
+    if (typeof client.syncModule !== 'function') {
+      res.json({ message: '当前平台暂不支持自动创建工作表，请手动创建后填写 sheetId。' });
+      return;
+    }
+    const result = await client.syncModule(module);
+    const sheetId = result?.sheetId || result?.id;
+    const savedModule = sheetId && module.id ? await updateModuleSheetId(module.id, sheetId) : module;
+    res.json({ result, module: savedModule, message: result?.created ? '已创建工作表并同步表头' : '已同步表头' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/config/modules/:id/fields', async (req, res, next) => {
+  try {
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const module = modules.find((item) => item.id === Number(req.params.id));
+    if (!module) {
+      res.status(404).json({ message: '模块不存在' });
+      return;
+    }
+    res.json({ fields: module.fields });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/config/modules/:id/fields', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const module = modules.find((item) => item.id === Number(req.params.id));
+    if (!module) {
+      res.status(404).json({ message: '模块不存在' });
+      return;
+    }
+    const parsed = fieldsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '字段配置不完整' });
+      return;
+    }
+    const saved = await replaceModuleFields(module.key, parsed.data.fields);
+    res.json({ module: saved });
   } catch (error) {
     next(error);
   }
@@ -241,3 +487,82 @@ router.get('/audit-logs', async (req, res) => {
   const logs = await all('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 200');
   res.json({ logs });
 });
+
+async function getModuleRows(req: any, res: any, next: any) {
+  try {
+    const module = await findModule(req.params.module);
+    if (!module || !canRead(req.user.role, module)) {
+      res.status(404).json({ message: '模块不存在或无权访问' });
+      return;
+    }
+
+    const client = await getClientForModule(module, req.user.dataSourceId);
+    const rows = await client.getRows(module);
+    res.json({ module, canEdit: canEdit(req.user.role, module), rows });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createModuleRow(req: any, res: any, next: any) {
+  try {
+    const module = await findModule(req.params.module);
+    if (!module || !canEdit(req.user.role, module)) {
+      res.status(403).json({ message: '没有新增权限' });
+      return;
+    }
+
+    const client = await getClientForModule(module, req.user.dataSourceId);
+    const row = await client.createRow(module, req.body);
+    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'create', rowId: row.id, payload: req.body });
+    res.status(201).json({ row });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updateModuleRow(req: any, res: any, next: any) {
+  try {
+    const module = await findModule(req.params.module);
+    if (!module || !canEdit(req.user.role, module)) {
+      res.status(403).json({ message: '没有编辑权限' });
+      return;
+    }
+
+    const client = await getClientForModule(module, req.user.dataSourceId);
+    const row = await client.updateRow(module, req.params.rowId, req.body);
+    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload: req.body });
+    res.json({ row });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deleteModuleRow(req: any, res: any, next: any) {
+  try {
+    const module = await findModule(req.params.module);
+    if (!module || !canEdit(req.user.role, module)) {
+      res.status(403).json({ message: '没有删除权限' });
+      return;
+    }
+
+    const client = await getClientForModule(module, req.user.dataSourceId);
+    await client.deleteRow(module, req.params.rowId);
+    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'delete', rowId: req.params.rowId });
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getClientForModule(module: ModuleConfig, selectedDataSourceId?: number) {
+  return getDataSourceClient(moduleDataSourceId(module, selectedDataSourceId));
+}
+
+function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {
+  return {
+    ...input,
+    dataSourceId: input.dataSourceId ?? undefined,
+    sheetId: input.sheetId || undefined
+  };
+}

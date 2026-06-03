@@ -38,13 +38,13 @@ export class DingTalkSheetClient {
   private token?: { value: string; expiresAt: number };
   private memory = JSON.parse(JSON.stringify(mockRows)) as typeof mockRows;
 
-  constructor() {
+  constructor(config?: Partial<DingTalkConfig>) {
     this.config = {
-      appKey: process.env.DINGTALK_APP_KEY,
-      appSecret: process.env.DINGTALK_APP_SECRET,
-      workbookId: process.env.DINGTALK_WORKBOOK_ID,
-      operatorId: process.env.DINGTALK_OPERATOR_ID,
-      baseUrl: process.env.DINGTALK_API_BASE_URL || 'https://api.dingtalk.com'
+      appKey: config?.appKey ?? process.env.DINGTALK_APP_KEY,
+      appSecret: config?.appSecret ?? process.env.DINGTALK_APP_SECRET,
+      workbookId: config?.workbookId ?? process.env.DINGTALK_WORKBOOK_ID,
+      operatorId: config?.operatorId ?? process.env.DINGTALK_OPERATOR_ID,
+      baseUrl: config?.baseUrl ?? process.env.DINGTALK_API_BASE_URL ?? 'https://api.dingtalk.com'
     };
     this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000 });
   }
@@ -69,6 +69,29 @@ export class DingTalkSheetClient {
       sheetId: sheet.sheetId || sheet.id,
       name: sheet.name || sheet.sheetName
     }));
+  }
+
+  async syncModule(module: ModuleConfig) {
+    if (!this.isConfigured) {
+      if (!this.memory[module.key as keyof typeof this.memory]) {
+        this.memory[module.key as keyof typeof this.memory] = [] as any;
+      }
+      return { sheetId: module.sheetId || module.key, name: module.sheetName, created: false, headerSynced: true };
+    }
+
+    const existingSheets = await this.listWorksheets();
+    let sheet = existingSheets.find((item) => item.sheetId === module.sheetId || item.name === module.sheetName);
+    let created = false;
+
+    if (!sheet) {
+      sheet = await this.createWorksheet(module.sheetName);
+      created = true;
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+
+    const syncedModule = { ...module, sheetId: sheet.sheetId };
+    await this.writeHeaderRow(syncedModule);
+    return { ...sheet, created, headerSynced: true };
   }
 
   async getRows(module: ModuleConfig): Promise<SheetRow[]> {
@@ -150,7 +173,7 @@ export class DingTalkSheetClient {
   }
 
   async inspectRow(moduleKey: string, rowNumber: number) {
-    const module = findModule(moduleKey);
+    const module = await findModule(moduleKey);
     if (!module) throw new Error(`未找到模块：${moduleKey}`);
     if (!this.isConfigured) throw new Error('钉钉配置不完整');
 
@@ -188,6 +211,43 @@ export class DingTalkSheetClient {
     const sheet = sheets.find((item) => item.name === module.sheetName);
     if (!sheet) throw new Error(`钉钉表格中未找到工作表：${module.sheetName}`);
     return sheet.sheetId;
+  }
+
+  private async createWorksheet(name: string): Promise<WorksheetMeta> {
+    const token = await this.getAccessToken();
+    const candidates = [
+      { name },
+      { sheetName: name },
+      { title: name }
+    ];
+    let lastError: any;
+
+    for (const body of candidates) {
+      try {
+        const response = await this.http.post(
+          `/v1.0/doc/workbooks/${this.config.workbookId}/sheets`,
+          body,
+          {
+            headers: { 'x-acs-dingtalk-access-token': token },
+            params: { operatorId: this.config.operatorId }
+          }
+        );
+        const data = response.data?.sheet || response.data?.data || response.data?.value || response.data;
+        const sheetId = data?.sheetId || data?.id;
+        const sheetName = data?.name || data?.sheetName || name;
+        if (!sheetId) throw new Error('钉钉创建工作表成功但未返回 sheetId');
+        return { sheetId, name: sheetName };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw lastError;
+  }
+
+  private async writeHeaderRow(module: ModuleConfig) {
+    const values = module.fields.map((field) => field.label);
+    await this.writeRawValues(module, module.headerRow, values);
   }
 
   private cellsToRow(module: ModuleConfig, cells: unknown[], rowNumber: number): SheetRow {

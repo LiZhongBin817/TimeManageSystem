@@ -4,12 +4,55 @@ import { ElMessage } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import { getSummary } from '../api';
 
+interface ScheduleItem {
+  id: string;
+  moduleTitle: string;
+  status: 'developing' | 'testing';
+  name: string;
+  branchName: string;
+  content: string;
+  zentaoLink?: string;
+  developer: string;
+  productOwner: string;
+  tester: string;
+  plannedTestAt?: string;
+  actualTestAt?: string;
+  launchAt?: string;
+}
+
+interface DeveloperModuleStat {
+  title: string;
+  total: number;
+  done: number;
+  unfinished: number;
+}
+
+interface DeveloperStat {
+  name: string;
+  modules: DeveloperModuleStat[];
+}
+
 const loading = ref(false);
 const summary = ref<any>();
 
-const totalInProgress = computed(() => {
-  return (summary.value?.moduleStats || []).reduce((sum: number, item: any) => sum + item.developing + item.testing, 0);
+const developingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.developingItems || []);
+const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.testingItems || []);
+const inProgressTotal = computed(() => developingItems.value.length + testingItems.value.length);
+const totalModules = computed(() => summary.value?.moduleStats?.length || 0);
+
+const developerStats = computed(() => {
+  return ((summary.value?.developerStats || []) as DeveloperStat[])
+    .map((developer) => {
+      const total = developer.modules.reduce((sum, item) => sum + Number(item.total || 0), 0);
+      const done = developer.modules.reduce((sum, item) => sum + Number(item.done || 0), 0);
+      const unfinished = developer.modules.reduce((sum, item) => sum + Number(item.unfinished || 0), 0);
+      return { ...developer, total, done, unfinished };
+    })
+    .filter((developer) => developer.total > 0)
+    .sort((a, b) => b.unfinished - a.unfinished || b.total - a.total);
 });
+
+const maxDeveloperTotal = computed(() => Math.max(1, ...developerStats.value.map((item) => item.total)));
 
 async function load() {
   loading.value = true;
@@ -22,16 +65,25 @@ async function load() {
   }
 }
 
-function versionsText(items: string[]) {
-  return items.length ? items.join('、') : '暂无';
-}
-
-function versionItems(items: string[]) {
-  return items.length ? items : ['暂无'];
+function dateText(value?: string) {
+  const text = String(value || '').trim();
+  return text && text !== '-' ? text : '未填';
 }
 
 function rateStyle(rate: number) {
   return { width: `${Math.max(0, Math.min(100, rate || 0))}%` };
+}
+
+function statusType(status: ScheduleItem['status']) {
+  return status === 'testing' ? 'warning' : 'primary';
+}
+
+function developerBarStyle(value: number) {
+  return { width: `${Math.max(4, Math.round((value / maxDeveloperTotal.value) * 100))}%` };
+}
+
+function segmentStyle(value: number, total: number) {
+  return { flexBasis: `${total ? Math.max(4, (value / total) * 100) : 0}%` };
 }
 
 onMounted(load);
@@ -41,89 +93,149 @@ onMounted(load);
   <main v-loading="loading" class="content dashboard-page">
     <div class="dashboard-hero">
       <div>
-        <p class="eyebrow">项目进度总览</p>
+        <p class="eyebrow">项目进行中总览</p>
         <h1>汇总看板</h1>
         <span>当前日期：{{ summary?.currentDate || '-' }}</span>
       </div>
       <div class="toolbar">
-        <el-tag :type="summary?.source === 'dingtalk' ? 'success' : 'warning'">
-          {{ summary?.source === 'dingtalk' ? '钉钉实时数据' : '本地模拟数据' }}
+        <el-tag :type="summary?.source === 'feishu' ? 'primary' : 'success'">
+          {{ summary?.source === 'feishu' ? '飞书实时数据' : '钉钉实时数据' }}
         </el-tag>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
     </div>
 
-    <section class="kpi-grid">
-      <article class="kpi-card primary">
+    <section class="compact-kpi-grid">
+      <article>
+        <span>进行中总数</span>
+        <strong>{{ inProgressTotal }}</strong>
+        <small>开发 {{ developingItems.length }} / 测试 {{ testingItems.length }}</small>
+      </article>
+      <article>
+        <span>项目模块</span>
+        <strong>{{ totalModules }}</strong>
+        <small>当前启用模块</small>
+      </article>
+      <article>
+        <span>总需求数</span>
+        <strong>{{ summary?.overview?.totalRows || 0 }}</strong>
+        <small>已完成 {{ summary?.overview?.totalDone || 0 }}</small>
+      </article>
+      <article>
         <span>整体完成率</span>
         <strong>{{ summary?.overview?.overallRate || 0 }}%</strong>
-        <div class="progress-track">
+        <div class="progress-track compact">
           <div class="progress-fill" :style="rateStyle(summary?.overview?.overallRate || 0)"></div>
         </div>
       </article>
-      <article class="kpi-card">
-        <span>总需求数</span>
-        <strong>{{ summary?.overview?.totalRows || 0 }}</strong>
-      </article>
-      <article class="kpi-card">
-        <span>已完成</span>
-        <strong>{{ summary?.overview?.totalDone || 0 }}</strong>
-      </article>
-      <article class="kpi-card warning">
-        <span>进行中</span>
-        <strong>{{ totalInProgress }}</strong>
-        <small>开发 {{ (summary?.moduleStats || []).reduce((sum: number, item: any) => sum + item.developing, 0) }} / 测试 {{ (summary?.moduleStats || []).reduce((sum: number, item: any) => sum + item.testing, 0) }}</small>
-      </article>
     </section>
 
-    <section class="module-card-grid">
-      <article v-for="item in summary?.moduleStats || []" :key="item.key" class="module-card">
+    <section class="dashboard-focus-grid">
+      <article class="focus-card developing">
         <header>
           <div>
-            <h3>{{ item.title }}</h3>
-            <span>{{ item.done }} / {{ item.total }} 已完成</span>
+            <span>开发中汇总</span>
+            <strong>{{ developingItems.length }}</strong>
           </div>
-          <strong>{{ item.completionRate }}%</strong>
+          <el-tag type="primary">待提测</el-tag>
         </header>
-        <div class="progress-track">
-          <div class="progress-fill" :style="rateStyle(item.completionRate)"></div>
+        <div class="schedule-list">
+          <div v-if="!developingItems.length" class="empty-line">暂无开发中项目</div>
+          <article v-for="item in developingItems" :key="`developing-${item.id}`" class="schedule-item">
+            <div class="schedule-main">
+              <el-tag :type="statusType(item.status)" size="small">开发中</el-tag>
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.moduleTitle }}</span>
+            </div>
+            <div class="schedule-meta">
+              <span>研发：{{ item.developer || '-' }}</span>
+              <span>测试：{{ item.tester || '-' }}</span>
+              <span>产品：{{ item.productOwner || '-' }}</span>
+            </div>
+            <div class="schedule-dates">
+              <div><span>计划提测</span><b>{{ dateText(item.plannedTestAt) }}</b></div>
+              <div><span>实际提测</span><b>{{ dateText(item.actualTestAt) }}</b></div>
+              <div><span>上线时间</span><b>{{ dateText(item.launchAt) }}</b></div>
+            </div>
+          </article>
         </div>
-        <div class="module-metrics">
-          <div><span>需求数</span><strong>{{ item.total }}</strong></div>
-          <div><span>完成</span><strong>{{ item.done }}</strong></div>
-          <div><span>开发中</span><strong class="danger-cell">{{ item.developing }}</strong></div>
-          <div><span>测试中</span><strong class="danger-cell">{{ item.testing }}</strong></div>
-        </div>
-        <div class="version-list">
+      </article>
+
+      <article class="focus-card testing">
+        <header>
           <div>
-            <b>测试中</b>
-            <span v-for="version in versionItems(item.testingVersions || [])" :key="`testing-${item.key}-${version}`" class="version-pill">{{ version }}</span>
+            <span>测试中汇总</span>
+            <strong>{{ testingItems.length }}</strong>
           </div>
-          <div>
-            <b>开发中</b>
-            <span v-for="version in versionItems(item.developingVersions || [])" :key="`developing-${item.key}-${version}`" class="version-pill">{{ version }}</span>
-          </div>
+          <el-tag type="warning">待上线</el-tag>
+        </header>
+        <div class="schedule-list">
+          <div v-if="!testingItems.length" class="empty-line">暂无测试中项目</div>
+          <article v-for="item in testingItems" :key="`testing-${item.id}`" class="schedule-item">
+            <div class="schedule-main">
+              <el-tag :type="statusType(item.status)" size="small">测试中</el-tag>
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.moduleTitle }}</span>
+            </div>
+            <div class="schedule-meta">
+              <span>研发：{{ item.developer || '-' }}</span>
+              <span>测试：{{ item.tester || '-' }}</span>
+              <span>产品：{{ item.productOwner || '-' }}</span>
+            </div>
+            <div class="schedule-dates">
+              <div><span>计划提测</span><b>{{ dateText(item.plannedTestAt) }}</b></div>
+              <div><span>实际提测</span><b>{{ dateText(item.actualTestAt) }}</b></div>
+              <div><span>上线时间</span><b>{{ dateText(item.launchAt) }}</b></div>
+            </div>
+          </article>
         </div>
       </article>
     </section>
 
     <section class="dashboard-section">
       <div class="section-heading">
-        <h2>分项目进度详情</h2>
-        <span>按完成率和当前进行中版本快速定位风险点</span>
+        <h2>人员分配统计</h2>
+        <span>按研发人员统计任务总量、已完成和未完成</span>
       </div>
-      <div class="detail-list">
-        <article v-for="item in summary?.moduleStats || []" :key="`${item.key}-detail`" class="detail-row">
-          <div class="detail-title">
+      <div class="developer-chart">
+        <article v-for="developer in developerStats" :key="developer.name" class="developer-bar-row">
+          <div class="developer-name">
+            <strong>{{ developer.name }}</strong>
+            <span>{{ developer.total }} 项</span>
+          </div>
+          <div class="developer-bar-wrap">
+            <div class="developer-total-bar" :style="developerBarStyle(developer.total)">
+              <div class="developer-segment done" :style="segmentStyle(developer.done, developer.total)"></div>
+              <div class="developer-segment unfinished" :style="segmentStyle(developer.unfinished, developer.total)"></div>
+            </div>
+          </div>
+          <div class="developer-counts">
+            <span class="done-dot">已完成 {{ developer.done }}</span>
+            <span class="unfinished-dot">未完成 {{ developer.unfinished }}</span>
+          </div>
+        </article>
+        <div v-if="!developerStats.length" class="empty-line">暂无人员分配数据</div>
+      </div>
+    </section>
+
+    <section class="dashboard-section">
+      <div class="section-heading">
+        <h2>模块进行中分布</h2>
+        <span>用于确认每个模块当前开发和测试压力</span>
+      </div>
+      <div class="module-status-grid">
+        <article v-for="item in summary?.moduleStats || []" :key="item.key" class="module-status-card">
+          <header>
             <strong>{{ item.title }}</strong>
             <span>{{ item.completionRate }}%</span>
-          </div>
-          <div class="progress-track">
+          </header>
+          <div class="progress-track compact">
             <div class="progress-fill" :style="rateStyle(item.completionRate)"></div>
           </div>
-          <div class="detail-progress">
-            <span>测试中：{{ versionsText(item.testingVersions || []) }}</span>
-            <span>开发中：{{ versionsText(item.developingVersions || []) }}</span>
+          <div class="module-status-metrics">
+            <div><span>开发中</span><b>{{ item.developing }}</b></div>
+            <div><span>测试中</span><b>{{ item.testing }}</b></div>
+            <div><span>已完成</span><b>{{ item.done }}/{{ item.total }}</b></div>
           </div>
         </article>
       </div>
@@ -132,7 +244,7 @@ onMounted(load);
     <section class="dashboard-section">
       <div class="section-heading">
         <h2>研发人员任务进展</h2>
-        <span>横向查看每位研发在各模块的总数、完成数和未完成数</span>
+        <span>按模块拆分每位研发的总数、完成数和未完成数</span>
       </div>
       <div class="dashboard-table-wrap">
         <table class="dashboard-table developer-table">
@@ -150,7 +262,7 @@ onMounted(load);
             </tr>
           </thead>
           <tbody>
-            <tr v-for="developer in summary?.developerStats || []" :key="developer.name">
+            <tr v-for="developer in developerStats" :key="`${developer.name}-table`">
               <td class="strong-cell">{{ developer.name }}</td>
               <template v-for="module in developer.modules" :key="`${developer.name}-${module.title}`">
                 <td>{{ module.total }}</td>
