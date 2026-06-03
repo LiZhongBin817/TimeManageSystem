@@ -98,7 +98,7 @@ export class DingTalkSheetClient {
 
   async createRow(module: ModuleConfig, payload: Record<string, unknown>) {
     const rows = await this.getRows(module);
-    const rowNumber = rows.length + module.dataStartRow;
+    const rowNumber = this.isConfigured ? await this.findWritableRow(module, rows.length + module.dataStartRow) : rows.length + module.dataStartRow;
     const row = this.normalizePayload(module, payload, `local-${Date.now()}`, rowNumber);
 
     if (!this.isConfigured) {
@@ -288,6 +288,21 @@ export class DingTalkSheetClient {
       if (hasContent) return { rowNumber: candidate, ...data };
     }
     return null;
+  }
+
+  private async findWritableRow(module: ModuleConfig, fallbackRowNumber: number) {
+    for (let candidate = fallbackRowNumber; candidate <= fallbackRowNumber + 30; candidate += 1) {
+      const data = await this.readRawRow(module, candidate);
+      const values = data.values?.[0] || data.displayValues?.[0] || [];
+      const formulas = data.formulas?.[0] || [];
+      const hasUserContent = values.some((value: unknown, index: number) => {
+        if (formulas[index]) return false;
+        const text = String(value ?? '').trim();
+        return text !== '' && text !== '-';
+      });
+      if (!hasUserContent) return candidate;
+    }
+    return fallbackRowNumber;
   }
 
   private rewriteFormulaRow(formula: string, fromRow: number, toRow: number) {

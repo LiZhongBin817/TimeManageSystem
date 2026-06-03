@@ -182,6 +182,10 @@ body {
   text-decoration: underline;
 }
 
+.form-alert {
+  margin-bottom: 14px;
+}
+
 .dashboard-page {
   color: #172033;
 }

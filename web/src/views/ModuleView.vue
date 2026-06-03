@@ -146,6 +146,14 @@ watch(() => route.params.moduleKey, load, { immediate: true });
     </section>
 
     <el-dialog v-model="dialogOpen" :title="editingRow ? '编辑数据' : '新增数据'" width="680px">
+      <el-alert
+        v-if="!editingRow"
+        class="form-alert"
+        type="info"
+        show-icon
+        :closable="false"
+        title="新增会优先写入钉钉表格中已预留的空白模板行，以继承原表网格、公式和基础格式。"
+      />
       <el-form label-position="top">
         <el-form-item v-for="field in editableFields" :key="field.key" :label="field.label" :required="field.required">
           <el-input-number v-if="field.type === 'number'" v-model="form[field.key]" :min="0" controls-position="right" class="full-field" />
