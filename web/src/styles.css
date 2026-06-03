@@ -316,7 +316,11 @@ body {
   gap: 8px;
 }
 
-.version-list p {
+.version-list div {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
   margin: 0;
   padding: 9px 10px;
   border-radius: 6px;
@@ -328,6 +332,17 @@ body {
   display: inline-block;
   min-width: 58px;
   color: #334155;
+}
+
+.version-pill {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  word-break: break-word;
 }
 
 .dashboard-section {

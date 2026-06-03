@@ -117,7 +117,7 @@ export class DingTalkSheetClient {
       throw new Error('未找到要更新的数据行');
     }
 
-    const updated = { ...current, ...this.normalizePayload(module, payload, current.id, current.rowNumber) };
+    const updated = this.mergePayload(module, current, payload);
     if (!this.isConfigured) {
       const list = this.memory[module.key as keyof typeof this.memory];
       const index = list.findIndex((item) => item.id === rowId || String(item.rowNumber) === rowId);
@@ -207,6 +207,16 @@ export class DingTalkSheetClient {
   private normalizePayload(module: ModuleConfig, payload: Record<string, unknown>, id: string, rowNumber?: number): SheetRow {
     const row: SheetRow = { id, rowNumber };
     for (const field of module.fields) {
+      const value = payload[field.key];
+      row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
+    }
+    return row;
+  }
+
+  private mergePayload(module: ModuleConfig, current: SheetRow, payload: Record<string, unknown>) {
+    const row: SheetRow = { ...current };
+    for (const field of module.fields) {
+      if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
       const value = payload[field.key];
       row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
     }
@@ -316,7 +326,7 @@ export class DingTalkSheetClient {
     );
   }
 
-  private async withRetry<T>(request: () => Promise<T>, attempts = 3): Promise<T> {
+  private async withRetry<T>(request: () => Promise<T>, attempts = 5): Promise<T> {
     let lastError: unknown;
     for (let index = 0; index < attempts; index += 1) {
       try {
@@ -325,7 +335,7 @@ export class DingTalkSheetClient {
         lastError = error;
         const status = error.response?.status;
         if (![429, 500, 502, 503, 504].includes(status) || index === attempts - 1) break;
-        await new Promise((resolve) => setTimeout(resolve, 500 * (index + 1)));
+        await new Promise((resolve) => setTimeout(resolve, 800 * (index + 1)));
       }
     }
     throw lastError;

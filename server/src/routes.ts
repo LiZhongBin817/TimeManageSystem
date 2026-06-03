@@ -88,7 +88,10 @@ router.get('/dashboard/summary', async (req, res, next) => {
     const isDone = (value: unknown) => ['是', '已完成', '完成', 'true'].includes(String(value || '').trim().toLowerCase());
     const versionName = (row: Record<string, unknown>) => String(row.name || row.content || row.branchName || '').trim();
     const isTesting = (row: Record<string, unknown>) => {
-      const text = `${row.name || ''} ${row.content || ''} ${row.remark || ''}`.toLowerCase();
+      const name = String(row.name || '').trim();
+      if (name.includes('（测试）') || name.includes('(测试)')) return true;
+      if (name.includes('（开发）') || name.includes('(开发)')) return false;
+      const text = `${row.content || ''} ${row.remark || ''}`.toLowerCase();
       return text.includes('测试') || text.includes('test');
     };
     const pushDeveloperStat = (name: string, moduleTitle: string, done: boolean) => {

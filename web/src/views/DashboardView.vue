@@ -26,6 +26,10 @@ function versionsText(items: string[]) {
   return items.length ? items.join('、') : '暂无';
 }
 
+function versionItems(items: string[]) {
+  return items.length ? items : ['暂无'];
+}
+
 function rateStyle(rate: number) {
   return { width: `${Math.max(0, Math.min(100, rate || 0))}%` };
 }
@@ -91,8 +95,14 @@ onMounted(load);
           <div><span>测试中</span><strong class="danger-cell">{{ item.testing }}</strong></div>
         </div>
         <div class="version-list">
-          <p><b>测试中</b>{{ versionsText(item.testingVersions || []) }}</p>
-          <p><b>开发中</b>{{ versionsText(item.developingVersions || []) }}</p>
+          <div>
+            <b>测试中</b>
+            <span v-for="version in versionItems(item.testingVersions || [])" :key="`testing-${item.key}-${version}`" class="version-pill">{{ version }}</span>
+          </div>
+          <div>
+            <b>开发中</b>
+            <span v-for="version in versionItems(item.developingVersions || [])" :key="`developing-${item.key}-${version}`" class="version-pill">{{ version }}</span>
+          </div>
         </div>
       </article>
     </section>
