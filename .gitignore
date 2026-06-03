@@ -6,3 +6,6 @@ dist/
 *.db-wal
 .DS_Store
 npm-debug.log*
+# 忽略dev运行日志
+*.dev.err.log
+*.dev.out.log
