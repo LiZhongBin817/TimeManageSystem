@@ -2,6 +2,7 @@ export type Role = 'admin' | 'editor' | 'viewer';
 export type PlatformKey = 'dingtalk' | 'feishu';
 export type ModuleCategory = 'project' | 'staff' | 'todo';
 export type FieldType = 'text' | 'number' | 'date' | 'status' | 'link' | 'staff' | 'formula' | 'hidden';
+export type PermissionSubjectType = 'role' | 'user';
 
 export interface User {
   id: number;
@@ -64,7 +65,22 @@ export interface ModuleConfig {
   enabled: boolean;
   sortOrder: number;
   fields: ModuleField[];
+  canView?: boolean;
   canEdit?: boolean;
+  canCreate?: boolean;
+  canUpdate?: boolean;
+  canDelete?: boolean;
+}
+
+export interface ModulePermission {
+  moduleKey: string;
+  moduleTitle: string;
+  category: ModuleCategory;
+  explicit?: boolean;
+  canView: boolean;
+  canCreate: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
 }
 
 export interface SheetRow {

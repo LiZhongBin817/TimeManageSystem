@@ -16,6 +16,18 @@ interface WorksheetMeta {
   name: string;
 }
 
+interface EnterpriseMember {
+  providerUserId: string;
+  unionId?: string;
+  openId?: string;
+  name: string;
+  avatar?: string;
+  mobile?: string;
+  email?: string;
+  department?: string;
+  raw?: unknown;
+}
+
 function columnName(index: number) {
   let name = '';
   let n = index + 1;
@@ -51,6 +63,49 @@ export class DingTalkSheetClient {
 
   get isConfigured() {
     return Boolean(this.config.appKey && this.config.appSecret && this.config.workbookId && this.config.operatorId);
+  }
+
+  async listEnterpriseMembers(): Promise<EnterpriseMember[]> {
+    if (!this.config.appKey || !this.config.appSecret) return [];
+    const token = await this.getLegacyAccessToken();
+    const departments = await this.listDepartments(token, 1);
+    const deptIds = [1, ...departments.map((dept) => dept.dept_id || dept.deptId).filter(Boolean)];
+    const deptNameById = new Map<number, string>();
+    departments.forEach((dept) => deptNameById.set(Number(dept.dept_id || dept.deptId), String(dept.name || '')));
+    const members = new Map<string, EnterpriseMember>();
+
+    for (const deptId of deptIds) {
+      let cursor = 0;
+      while (true) {
+        const response = await axios.post(
+          'https://oapi.dingtalk.com/topapi/v2/user/list',
+          { dept_id: Number(deptId), cursor, size: 100, contain_access_limit: false, language: 'zh_CN' },
+          { params: { access_token: token }, timeout: 12000 }
+        );
+        const result = response.data?.result || {};
+        const list = result.list || [];
+        for (const user of list) {
+          const providerUserId = user.unionid || user.userid;
+          if (!providerUserId) continue;
+          members.set(String(providerUserId), {
+            providerUserId: String(providerUserId),
+            unionId: user.unionid,
+            openId: user.open_id,
+            name: user.name || user.nickname || String(providerUserId),
+            avatar: user.avatar,
+            mobile: user.mobile,
+            email: user.email,
+            department: deptNameById.get(Number(deptId)),
+            raw: user
+          });
+        }
+        if (!result.has_more) break;
+        cursor = Number(result.next_cursor || 0);
+        if (!cursor) break;
+      }
+    }
+
+    return Array.from(members.values());
   }
 
   async listWorksheets(): Promise<WorksheetMeta[]> {
@@ -205,6 +260,33 @@ export class DingTalkSheetClient {
     return value;
   }
 
+  private async getLegacyAccessToken() {
+    const response = await axios.get('https://oapi.dingtalk.com/gettoken', {
+      params: { appkey: this.config.appKey, appsecret: this.config.appSecret },
+      timeout: 12000
+    });
+    const token = response.data?.access_token;
+    if (!token || response.data?.errcode) {
+      throw new Error(response.data?.errmsg || '钉钉通讯录 access_token 获取失败');
+    }
+    return token;
+  }
+
+  private async listDepartments(token: string, rootDeptId: number): Promise<any[]> {
+    const response = await axios.post(
+      'https://oapi.dingtalk.com/topapi/v2/department/listsub',
+      { dept_id: rootDeptId },
+      { params: { access_token: token }, timeout: 12000 }
+    );
+    const list = response.data?.result || [];
+    const children: any[] = [];
+    for (const dept of list) {
+      children.push(dept);
+      children.push(...await this.listDepartments(token, Number(dept.dept_id || dept.deptId)));
+    }
+    return children;
+  }
+
   private async resolveSheetId(module: ModuleConfig) {
     if (module.sheetId) return module.sheetId;
     const sheets = await this.listWorksheets();
@@ -268,7 +350,9 @@ export class DingTalkSheetClient {
     const row: SheetRow = { id, rowNumber };
     for (const field of module.fields) {
       const value = payload[field.key];
-      row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
+      row[field.key] = value === undefined || value === null || value === ''
+        ? (field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-')
+        : String(value);
     }
     return row;
   }
@@ -278,7 +362,9 @@ export class DingTalkSheetClient {
     for (const field of module.fields) {
       if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
       const value = payload[field.key];
-      row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
+      row[field.key] = value === undefined || value === null || value === ''
+        ? (field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-')
+        : String(value);
     }
     return row;
   }
@@ -291,7 +377,7 @@ export class DingTalkSheetClient {
     const values = [module.fields.map((field) => {
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
-      if (!emptyAsDash || field.type === 'date') return '';
+      if (!emptyAsDash || field.type === 'date' || field.type === 'formula' || field.formula) return '';
       return '-';
     })];
 
@@ -312,7 +398,7 @@ export class DingTalkSheetClient {
     const values = module.fields.map((field) => {
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
-      return field.type === 'date' ? '' : '-';
+      return field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-';
     });
 
     if (previousRow?.formulas?.[0]) {
@@ -331,7 +417,7 @@ export class DingTalkSheetClient {
       if (existingFormula) return existingFormula;
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
-      return field.type === 'date' ? '' : '-';
+      return field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-';
     });
 
     await this.writeRawValues(module, rowNumber, values);

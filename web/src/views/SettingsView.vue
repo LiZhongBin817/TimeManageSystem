@@ -8,21 +8,28 @@ import {
   getConfigModules,
   getDataSourceInstances,
   getMe,
+  getPermissions,
   getUsers,
   saveConfigModule,
   saveDataSourceInstance,
   saveModuleFields,
+  savePermissions,
+  syncEnterpriseMembers,
   syncConfigModule,
   updateManagedUser
 } from '../api';
-import type { DataSourceInstance, FieldType, ManagedUser, ModuleConfig, ModuleField, User } from '../types';
+import type { DataSourceInstance, FieldType, ManagedUser, ModuleConfig, ModuleField, ModulePermission, PermissionSubjectType, Role, User } from '../types';
 
 const loading = ref(false);
 const sources = ref<DataSourceInstance[]>([]);
 const modules = ref<ModuleConfig[]>([]);
 const users = ref<ManagedUser[]>([]);
+const permissions = ref<ModulePermission[]>([]);
 const me = ref<User>();
 const activeTab = ref('sources');
+const permissionSubjectType = ref<PermissionSubjectType>('user');
+const permissionSubjectId = ref('');
+const syncingMembers = ref(false);
 const sourceDialogOpen = ref(false);
 const moduleDialogOpen = ref(false);
 const userDialogOpen = ref(false);
@@ -39,6 +46,15 @@ const userForm = reactive<Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'ena
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
 const sourceOptions = computed(() => sources.value.map((item) => ({ label: item.name, value: item.id })));
 const isAdmin = computed(() => me.value?.role === 'admin');
+const roleOptions: Array<{ label: string; value: Role }> = [
+  { label: '管理员', value: 'admin' },
+  { label: '编辑者', value: 'editor' },
+  { label: '只读用户', value: 'viewer' }
+];
+const permissionSubjectOptions = computed(() => {
+  if (permissionSubjectType.value === 'role') return roleOptions;
+  return users.value.map((user) => ({ label: `${user.displayName}（${user.role}）`, value: String(user.id) }));
+});
 
 function emptySource(): DataSourceInstance {
   return {
@@ -55,7 +71,8 @@ function emptySource(): DataSourceInstance {
       appId: '',
       spreadsheetToken: '',
       redirectUri: '',
-      loginEnabled: 'true'
+      loginEnabled: 'true',
+      localLoginEnabled: 'false'
     }
   };
 }
@@ -110,12 +127,59 @@ async function load() {
     ]);
     sources.value = sourceList;
     modules.value = moduleList;
-    if (me.value.role === 'admin') users.value = await getUsers();
+    if (me.value.role === 'admin') {
+      users.value = await getUsers();
+      if (!permissionSubjectId.value) permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : 'admin';
+      await loadPermissions();
+    }
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '配置加载失败');
   } finally {
     loading.value = false;
   }
+}
+
+async function loadPermissions() {
+  if (!isAdmin.value || !permissionSubjectId.value) return;
+  try {
+    permissions.value = await getPermissions(permissionSubjectType.value, permissionSubjectId.value);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '权限加载失败');
+  }
+}
+
+async function submitPermissions() {
+  if (!permissionSubjectId.value) return;
+  try {
+    permissions.value = await savePermissions(permissionSubjectType.value, permissionSubjectId.value, permissions.value);
+    ElMessage.success('权限已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '权限保存失败');
+  }
+}
+
+async function syncMembers() {
+  syncingMembers.value = true;
+  try {
+    const result = await syncEnterpriseMembers();
+    users.value = result.users?.length ? result.users : await getUsers();
+    ElMessage.success(`企业成员同步完成：新增 ${result.created} 人，更新 ${result.updated} 人`);
+    if (permissionSubjectType.value === 'user' && !users.value.some((user) => String(user.id) === permissionSubjectId.value)) {
+      permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : '';
+    }
+    await loadPermissions();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '企业成员同步失败');
+  } finally {
+    syncingMembers.value = false;
+  }
+}
+
+function onPermissionSubjectTypeChange() {
+  permissionSubjectId.value = permissionSubjectType.value === 'role'
+    ? 'admin'
+    : users.value[0] ? String(users.value[0].id) : '';
+  loadPermissions();
 }
 
 function openSourceCreate() {
@@ -183,6 +247,18 @@ async function submitModule() {
 }
 
 async function removeModule(row: ModuleConfig) {
+  if (!row.id) return;
+  try {
+    await ElMessageBox.confirm('确认删除这个模块？仅删除本地模块配置、字段和权限，不删除外部表格数据。', '删除确认', { type: 'warning' });
+    await deleteConfigModule(row.id);
+    ElMessage.success('已删除模块');
+    load();
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '删除失败');
+  }
+}
+
+async function legacyRemoveModule(row: ModuleConfig) {
   if (!row.id) return;
   try {
     await ElMessageBox.confirm('确认停用这个模块？', '停用确认', { type: 'warning' });
@@ -287,6 +363,9 @@ onMounted(load);
         </el-tab-pane>
 
         <el-tab-pane v-if="isAdmin" label="用户管理" name="users">
+          <div class="toolbar permission-toolbar">
+            <el-button type="primary" :loading="syncingMembers" @click="syncMembers">同步企业成员</el-button>
+          </div>
           <el-table :data="users" stripe>
             <el-table-column prop="displayName" label="显示名称" min-width="150" />
             <el-table-column prop="username" label="登录标识" min-width="220" />
@@ -309,6 +388,37 @@ onMounted(load);
             </el-table-column>
           </el-table>
         </el-tab-pane>
+
+        <el-tab-pane v-if="isAdmin" label="权限管理" name="permissions">
+          <div class="toolbar permission-toolbar">
+            <el-segmented
+              v-model="permissionSubjectType"
+              :options="[{ label: '用户', value: 'user' }, { label: '角色', value: 'role' }]"
+              @change="onPermissionSubjectTypeChange"
+            />
+            <el-select v-model="permissionSubjectId" class="permission-subject-select" filterable @change="loadPermissions">
+              <el-option v-for="item in permissionSubjectOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <el-button type="primary" @click="submitPermissions">保存权限</el-button>
+            <el-button :loading="syncingMembers" @click="syncMembers">同步企业成员</el-button>
+          </div>
+          <el-table :data="permissions" stripe>
+            <el-table-column prop="moduleTitle" label="模块" min-width="180" />
+            <el-table-column prop="category" label="分类" width="110" />
+            <el-table-column label="查看菜单" width="110" align="center">
+              <template #default="{ row }"><el-checkbox v-model="row.canView" /></template>
+            </el-table-column>
+            <el-table-column label="新增" width="100" align="center">
+              <template #default="{ row }"><el-checkbox v-model="row.canCreate" :disabled="!row.canView" /></template>
+            </el-table-column>
+            <el-table-column label="编辑" width="100" align="center">
+              <template #default="{ row }"><el-checkbox v-model="row.canUpdate" :disabled="!row.canView" /></template>
+            </el-table-column>
+            <el-table-column label="删除" width="100" align="center">
+              <template #default="{ row }"><el-checkbox v-model="row.canDelete" :disabled="!row.canView" /></template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
       </el-tabs>
     </section>
 
@@ -324,6 +434,12 @@ onMounted(load);
           </el-form-item>
           <el-form-item label="排序"><el-input-number v-model="sourceForm.sortOrder" class="full-field" /></el-form-item>
           <el-form-item label="启用"><el-switch v-model="sourceForm.enabled" /></el-form-item>
+          <el-form-item label="启用备用登录">
+            <el-select v-model="sourceForm.config.localLoginEnabled" class="full-field">
+              <el-option label="启用" value="true" />
+              <el-option label="停用" value="false" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="启用企业登录">
             <el-select v-model="sourceForm.config.loginEnabled" class="full-field">
               <el-option label="启用" value="true" />

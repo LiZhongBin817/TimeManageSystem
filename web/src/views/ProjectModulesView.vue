@@ -16,9 +16,21 @@ const loading = ref(false);
 const modules = ref<ModuleConfig[]>([]);
 const selectedKey = ref('');
 const moduleConfig = ref<ModuleConfig>();
-const canEdit = ref(false);
+const canCreate = ref(false);
+const canUpdate = ref(false);
+const canDelete = ref(false);
 const rows = ref<SheetRow[]>([]);
 const keyword = ref('');
+const filters = reactive({
+  content: '',
+  isCompleted: '',
+  plannedTestAt: [] as string[],
+  actualTestAt: [] as string[],
+  launchAt: [] as string[],
+  developer: '',
+  productOwner: '',
+  tester: ''
+});
 const dialogOpen = ref(false);
 const editingRow = ref<SheetRow | null>(null);
 const form = reactive<Record<string, string | number>>({});
@@ -26,13 +38,21 @@ const staffOptions = ref({ product: [] as string[], tester: [] as string[], deve
 
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
-  if (!q) return rows.value;
-  return rows.value.filter((row) => Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(q)));
+  return rows.value.filter((row) => {
+    if (q && !Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(q))) return false;
+    if (filters.content.trim() && !String(row.content ?? '').toLowerCase().includes(filters.content.trim().toLowerCase())) return false;
+    if (filters.isCompleted && String(row.isCompleted ?? '').trim() !== filters.isCompleted) return false;
+    if (!matchDateRange(row.plannedTestAt, filters.plannedTestAt)) return false;
+    if (!matchDateRange(row.actualTestAt, filters.actualTestAt)) return false;
+    if (!matchDateRange(row.launchAt, filters.launchAt)) return false;
+    if (filters.developer && String(row.developer ?? '').trim() !== filters.developer) return false;
+    if (filters.productOwner && String(row.productOwner ?? '').trim() !== filters.productOwner) return false;
+    if (filters.tester && String(row.tester ?? '').trim() !== filters.tester) return false;
+    return true;
+  });
 });
 
-const editableFields = computed(() => {
-  return (moduleConfig.value?.fields || []).filter((field) => !isFormHidden(field));
-});
+const editableFields = computed(() => (moduleConfig.value?.fields || []).filter((field) => !isFormHidden(field)));
 
 function isFormulaField(field: ModuleField) {
   return field.formula || field.type === 'formula' || field.key === 'isCompleted' || field.key === 'name';
@@ -42,9 +62,36 @@ function isFormHidden(field: ModuleField) {
   return field.hidden || field.type === 'hidden' || isFormulaField(field) || field.key === 'sequence';
 }
 
+function hasField(key: string) {
+  return Boolean(moduleConfig.value?.fields.some((field) => field.key === key));
+}
+
 function fieldOptions(field: ModuleField) {
   if (field.type !== 'staff' || !field.staffRole) return [];
   return staffOptions.value[field.staffRole];
+}
+
+function matchDateRange(value: unknown, range: string[]) {
+  if (!range?.length || range.length !== 2) return true;
+  const text = String(value ?? '').trim();
+  if (!text || text === '-') return false;
+  return text >= range[0] && text <= range[1];
+}
+
+function clearFilters() {
+  keyword.value = '';
+  filters.content = '';
+  filters.isCompleted = '';
+  filters.plannedTestAt = [];
+  filters.actualTestAt = [];
+  filters.launchAt = [];
+  filters.developer = '';
+  filters.productOwner = '';
+  filters.tester = '';
+}
+
+function isCompletedRow(row: SheetRow) {
+  return ['是', '已完成', '完成', 'true'].includes(String(row.isCompleted ?? '').trim().toLowerCase());
 }
 
 async function loadModules() {
@@ -62,11 +109,14 @@ async function loadStaffOptions() {
 
 async function loadRows() {
   if (!selectedKey.value) return;
+  moduleConfig.value = modules.value.find((item) => item.key === selectedKey.value) || moduleConfig.value;
   loading.value = true;
   try {
     const data = await getProjectRows(selectedKey.value);
     moduleConfig.value = data.module;
-    canEdit.value = data.canEdit;
+    canCreate.value = data.canCreate;
+    canUpdate.value = data.canUpdate;
+    canDelete.value = data.canDelete;
     rows.value = data.rows;
     await loadStaffOptions();
   } catch (error: any) {
@@ -99,6 +149,10 @@ function openCreate() {
 }
 
 function openEdit(row: SheetRow) {
+  if (isCompletedRow(row)) {
+    ElMessage.warning('已完成的数据不能编辑');
+    return;
+  }
   editingRow.value = row;
   resetForm(row);
   dialogOpen.value = true;
@@ -124,21 +178,27 @@ async function submit() {
   try {
     await ElMessageBox.confirm(editingRow.value ? '确认保存本次修改？' : '确认新增这条数据？', '写入数据源', { type: 'warning' });
     if (editingRow.value) {
+      if (!canUpdate.value) throw new Error('没有编辑权限');
       await updateProjectRow(moduleConfig.value.key, editingRow.value.id, buildPayload());
       ElMessage.success('已保存');
     } else {
+      if (!canCreate.value) throw new Error('没有新增权限');
       await createProjectRow(moduleConfig.value.key, buildPayload());
       ElMessage.success('已新增');
     }
     dialogOpen.value = false;
     loadRows();
   } catch (error: any) {
-    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '保存失败');
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || error.message || '保存失败');
   }
 }
 
 async function remove(row: SheetRow) {
   if (!moduleConfig.value) return;
+  if (isCompletedRow(row)) {
+    ElMessage.warning('已完成的数据不能删除');
+    return;
+  }
   try {
     await ElMessageBox.confirm('确认删除这条数据？外部表格中会清空对应行。', '删除确认', { type: 'warning' });
     await deleteProjectRow(moduleConfig.value.key, row.id);
@@ -161,12 +221,33 @@ onMounted(refreshAll);
       </el-select>
       <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前子模块数据" clearable />
       <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-      <el-button v-if="canEdit" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
+      <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
     </div>
+
+    <section class="filter-panel">
+      <el-input v-if="hasField('content')" v-model="filters.content" class="filter-item" placeholder="按内容过滤" clearable />
+      <el-select v-if="hasField('isCompleted')" v-model="filters.isCompleted" class="filter-item" placeholder="是否完成" clearable>
+        <el-option label="是" value="是" />
+        <el-option label="否" value="否" />
+      </el-select>
+      <el-date-picker v-if="hasField('plannedTestAt')" v-model="filters.plannedTestAt" class="filter-date" type="daterange" value-format="YYYY-MM-DD" start-placeholder="计划提测开始" end-placeholder="计划提测结束" clearable />
+      <el-date-picker v-if="hasField('actualTestAt')" v-model="filters.actualTestAt" class="filter-date" type="daterange" value-format="YYYY-MM-DD" start-placeholder="实际提测开始" end-placeholder="实际提测结束" clearable />
+      <el-date-picker v-if="hasField('launchAt')" v-model="filters.launchAt" class="filter-date" type="daterange" value-format="YYYY-MM-DD" start-placeholder="上线开始" end-placeholder="上线结束" clearable />
+      <el-select v-if="hasField('developer')" v-model="filters.developer" class="filter-item" placeholder="研发人员" filterable clearable>
+        <el-option v-for="name in staffOptions.developer" :key="name" :label="name" :value="name" />
+      </el-select>
+      <el-select v-if="hasField('productOwner')" v-model="filters.productOwner" class="filter-item" placeholder="产品人员" filterable clearable>
+        <el-option v-for="name in staffOptions.product" :key="name" :label="name" :value="name" />
+      </el-select>
+      <el-select v-if="hasField('tester')" v-model="filters.tester" class="filter-item" placeholder="测试人员" filterable clearable>
+        <el-option v-for="name in staffOptions.tester" :key="name" :label="name" :value="name" />
+      </el-select>
+      <el-button @click="clearFilters">清空条件</el-button>
+    </section>
 
     <section class="panel">
       <el-empty v-if="!modules.length" description="暂无启用的项目子模块，请到系统配置中新建模块" />
-      <el-table v-else :data="filteredRows" height="calc(100vh - 245px)" stripe>
+      <el-table v-else :data="filteredRows" height="calc(100vh - 325px)" stripe>
         <el-table-column v-for="field in moduleConfig?.fields || []" :key="field.key" :prop="field.key" :label="field.label" min-width="150" sortable>
           <template #default="{ row }">
             <el-tag v-if="field.type === 'status'" size="small">{{ row[field.key] || '-' }}</el-tag>
@@ -176,10 +257,10 @@ onMounted(refreshAll);
             <span v-else>{{ row[field.key] || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canEdit" fixed="right" label="操作" width="128">
+        <el-table-column v-if="canUpdate || canDelete" fixed="right" label="操作" width="128">
           <template #default="{ row }">
-            <el-button :icon="Edit" circle @click="openEdit(row)" />
-            <el-button :icon="Delete" circle type="danger" @click="remove(row)" />
+            <el-button v-if="canUpdate && !isCompletedRow(row)" :icon="Edit" circle @click="openEdit(row)" />
+            <el-button v-if="canDelete && !isCompletedRow(row)" :icon="Delete" circle type="danger" @click="remove(row)" />
           </template>
         </el-table-column>
       </el-table>

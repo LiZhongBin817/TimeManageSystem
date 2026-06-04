@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { DataAnalysis, Grid, List, Monitor, Setting, SwitchButton, UserFilled } from '@element-plus/icons-vue';
+import { DataAnalysis, Grid, List, Monitor, SwitchButton, Tools, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { clearToken, getMe } from '../api';
-import type { User } from '../types';
+import { clearToken, getMe, getModules } from '../api';
+import type { ModuleConfig, User } from '../types';
 
 const router = useRouter();
 const route = useRoute();
 const user = ref<User>();
+const readableModules = ref<ModuleConfig[]>([]);
 
 const canConfigure = computed(() => user.value?.role === 'admin' || user.value?.role === 'editor');
+const hasProjectModules = computed(() => readableModules.value.some((item) => item.category === 'project'));
+const hasStaff = computed(() => readableModules.value.some((item) => item.key === 'staff'));
+const hasTodos = computed(() => readableModules.value.some((item) => item.key === 'todos'));
 const active = computed(() => route.path);
 const pageTitle = computed(() => {
   if (route.path.startsWith('/project-modules')) return '项目模块';
@@ -23,6 +27,7 @@ const pageTitle = computed(() => {
 async function boot() {
   try {
     user.value = await getMe();
+    readableModules.value = await getModules();
   } catch {
     ElMessage.error('获取用户信息失败');
   }
@@ -48,20 +53,20 @@ onMounted(boot);
           <el-icon><DataAnalysis /></el-icon>
           <span>汇总看板</span>
         </el-menu-item>
-        <el-menu-item index="/project-modules">
+        <el-menu-item v-if="hasProjectModules" index="/project-modules">
           <el-icon><Monitor /></el-icon>
           <span>项目模块</span>
         </el-menu-item>
-        <el-menu-item index="/modules/staff">
+        <el-menu-item v-if="hasStaff" index="/modules/staff">
           <el-icon><UserFilled /></el-icon>
           <span>人员信息</span>
         </el-menu-item>
-        <el-menu-item index="/modules/todos">
+        <el-menu-item v-if="hasTodos" index="/modules/todos">
           <el-icon><List /></el-icon>
           <span>待办事项</span>
         </el-menu-item>
         <el-menu-item v-if="canConfigure" index="/settings">
-          <el-icon><Setting /></el-icon>
+          <el-icon><Tools /></el-icon>
           <span>系统配置</span>
         </el-menu-item>
       </el-menu>

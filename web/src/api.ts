@@ -1,5 +1,16 @@
 import axios from 'axios';
-import type { DataSourceInstance, DataSourcePlatform, ManagedUser, ModuleConfig, ModuleField, PlatformKey, SheetRow, User } from './types';
+import type {
+  DataSourceInstance,
+  DataSourcePlatform,
+  ManagedUser,
+  ModuleConfig,
+  ModuleField,
+  ModulePermission,
+  PermissionSubjectType,
+  PlatformKey,
+  SheetRow,
+  User
+} from './types';
 
 const TOKEN_KEY = 'tms-token';
 
@@ -36,14 +47,14 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-export async function login(username: string, password: string, dataSourceId: number) {
-  const { data } = await api.post<{ token: string; user: User }>('/auth/login', { username, password, dataSourceId });
+export async function login(username: string, password: string, platform: PlatformKey) {
+  const { data } = await api.post<{ token: string; user: User }>('/auth/login', { username, password, platform });
   setToken(data.token);
   return data;
 }
 
-export function oauthStartUrl(provider: PlatformKey, dataSourceId: number) {
-  return `/api/auth/oauth/${provider}/start?dataSourceId=${encodeURIComponent(dataSourceId)}`;
+export function oauthStartUrl(provider: PlatformKey) {
+  return `/api/auth/oauth/${provider}/start`;
 }
 
 export async function getLoginConfig() {
@@ -121,12 +132,12 @@ export async function getSummary() {
 }
 
 export async function getRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
   return data;
 }
 
 export async function getProjectRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
   return data;
 }
 
@@ -176,4 +187,31 @@ export async function getUsers() {
 export async function updateManagedUser(user: Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'enabled' | 'defaultDataSourceId'>) {
   const { data } = await api.put<{ user: ManagedUser }>(`/users/${user.id}`, user);
   return data.user;
+}
+
+export async function getPermissions(subjectType: PermissionSubjectType, subjectId: string) {
+  const { data } = await api.get<{ permissions: ModulePermission[] }>('/permissions', {
+    params: { subjectType, subjectId }
+  });
+  return data.permissions;
+}
+
+export async function savePermissions(subjectType: PermissionSubjectType, subjectId: string, permissions: ModulePermission[]) {
+  const { data } = await api.put<{ permissions: ModulePermission[] }>('/permissions', {
+    subjectType,
+    subjectId,
+    permissions: permissions.map((item) => ({
+      moduleKey: item.moduleKey,
+      canView: item.canView,
+      canCreate: item.canCreate,
+      canUpdate: item.canUpdate,
+      canDelete: item.canDelete
+    }))
+  });
+  return data.permissions;
+}
+
+export async function syncEnterpriseMembers() {
+  const { data } = await api.post<{ total: number; created: number; updated: number; users: ManagedUser[] }>('/enterprise-members/sync');
+  return data;
 }

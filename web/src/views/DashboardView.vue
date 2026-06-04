@@ -41,12 +41,22 @@ const inProgressTotal = computed(() => developingItems.value.length + testingIte
 const totalModules = computed(() => summary.value?.moduleStats?.length || 0);
 
 const developerStats = computed(() => {
+  const moduleStats = summary.value?.moduleStats || [];
   return ((summary.value?.developerStats || []) as DeveloperStat[])
     .map((developer) => {
-      const total = developer.modules.reduce((sum, item) => sum + Number(item.total || 0), 0);
-      const done = developer.modules.reduce((sum, item) => sum + Number(item.done || 0), 0);
-      const unfinished = developer.modules.reduce((sum, item) => sum + Number(item.unfinished || 0), 0);
-      return { ...developer, total, done, unfinished };
+      const sourceModules = developer.modules || [];
+      const modules: DeveloperModuleStat[] = moduleStats.map((module: any): DeveloperModuleStat => {
+        return sourceModules.find((item) => item.title === module.title) || {
+          title: module.title,
+          total: 0,
+          done: 0,
+          unfinished: 0
+        };
+      });
+      const total = modules.reduce((sum, item) => sum + Number(item.total || 0), 0);
+      const done = modules.reduce((sum, item) => sum + Number(item.done || 0), 0);
+      const unfinished = modules.reduce((sum, item) => sum + Number(item.unfinished || 0), 0);
+      return { ...developer, modules, total, done, unfinished };
     })
     .filter((developer) => developer.total > 0)
     .sort((a, b) => b.unfinished - a.unfinished || b.total - a.total);

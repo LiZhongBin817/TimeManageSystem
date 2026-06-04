@@ -5,8 +5,6 @@ import {
   ModuleConfig,
   ModuleField,
   canConfigure,
-  canEdit,
-  canRead,
   findModule,
   listDataSources,
   listModules,
@@ -15,16 +13,41 @@ import {
   saveModule,
   updateModuleSheetId
 } from './config/modules';
-import { addAuditLog, all, listUsers, run, updateUser } from './db';
+import {
+  PermissionSubjectType,
+  addAuditLog,
+  all,
+  getModulePermission,
+  listModulePermissions,
+  listUsers,
+  replaceModulePermissions,
+  run,
+  upsertEnterpriseMembers,
+  updateUser
+} from './db';
 import { getDataSourceClient, moduleDataSourceId } from './dataSources';
 import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontendLoginErrorUrl } from './oauth/oauthClients';
 
 export const router = Router();
 
+function serializeUser(user: any) {
+  return {
+    id: user.id,
+    username: user.username,
+    displayName: user.display_name,
+    role: user.role,
+    enabled: Boolean(user.enabled),
+    defaultDataSourceId: user.default_data_source_id || null,
+    defaultDataSourceName: user.default_data_source_name || '',
+    createdAt: user.created_at,
+    updatedAt: user.updated_at
+  };
+}
+
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
-  dataSourceId: z.coerce.number().int().positive()
+  platform: z.enum(['dingtalk', 'feishu'])
 });
 
 const userSchema = z.object({
@@ -70,6 +93,43 @@ const fieldsSchema = z.object({
   }))
 });
 
+const permissionSchema = z.object({
+  subjectType: z.enum(['role', 'user']),
+  subjectId: z.string().min(1),
+  permissions: z.array(z.object({
+    moduleKey: z.string().min(1),
+    canView: z.boolean(),
+    canCreate: z.boolean(),
+    canUpdate: z.boolean(),
+    canDelete: z.boolean()
+  }))
+});
+
+async function modulePermission(user: NonNullable<Express.Request['user']>, module: ModuleConfig) {
+  return getModulePermission({
+    userId: user.id,
+    role: user.role,
+    module: { key: module.key, enabled: module.enabled, editable: module.editable }
+  });
+}
+
+async function decorateModule(user: NonNullable<Express.Request['user']>, module: ModuleConfig) {
+  const permission = await modulePermission(user, module);
+  return {
+    ...module,
+    canView: permission.canView,
+    canCreate: permission.canCreate,
+    canUpdate: permission.canUpdate,
+    canDelete: permission.canDelete,
+    canEdit: permission.canCreate || permission.canUpdate || permission.canDelete
+  };
+}
+
+async function readableModules(user: NonNullable<Express.Request['user']>, modules: ModuleConfig[]) {
+  const decorated = await Promise.all(modules.map((module) => decorateModule(user, module)));
+  return decorated.filter((module) => module.canView);
+}
+
 router.get('/data-source/platforms', (_req, res) => {
   res.json({
     platforms: [
@@ -95,7 +155,7 @@ router.get('/auth/login-config', (_req, res) => {
       { key: 'dingtalk', label: '钉钉登录' },
       { key: 'feishu', label: '飞书登录' }
     ],
-    localLoginEnabled: true
+    localLoginEnabled: false
   });
 });
 
@@ -106,7 +166,12 @@ router.post('/auth/login', async (req, res, next) => {
       res.status(400).json({ message: '用户名、密码和数据源实例不能为空' });
       return;
     }
-    const result = await login(parsed.data.username, parsed.data.password, parsed.data.dataSourceId);
+    const dataSource = (await listDataSources(parsed.data.platform, false)).find((item) => item.enabled);
+    if (!dataSource?.enabled) {
+      res.status(403).json({ message: '当前数据源未授权管理员备用登录' });
+      return;
+    }
+    const result = await login(parsed.data.username, parsed.data.password, dataSource.id);
     if (!result) {
       res.status(401).json({ message: '用户名或密码错误' });
       return;
@@ -125,11 +190,11 @@ router.get('/auth/oauth/:provider/start', async (req, res, next) => {
       return;
     }
     const dataSourceId = Number(req.query.dataSourceId);
-    if (!dataSourceId) {
+    if (false && !dataSourceId) {
       res.status(400).json({ message: '请先选择数据源实例' });
       return;
     }
-    const dataSource = (await listDataSources(provider, true)).find((item) => item.id === dataSourceId && item.enabled);
+    const dataSource = (await listDataSources(provider, false)).find((item) => (!dataSourceId || item.id === dataSourceId) && item.enabled);
     if (!dataSource) {
       res.status(400).json({ message: '数据源实例不可用' });
       return;
@@ -139,7 +204,7 @@ router.get('/auth/oauth/:provider/start', async (req, res, next) => {
       return;
     }
     const redirectUri = callbackUri(provider, dataSource);
-    const state = signOAuthState({ provider, dataSourceId, redirectUri });
+    const state = signOAuthState({ provider, dataSourceId: dataSource.id, redirectUri });
     res.redirect(authUrl(provider, dataSource, redirectUri, state));
   } catch (error) {
     next(error);
@@ -178,17 +243,7 @@ router.get('/users', async (req, res, next) => {
     }
     const users = await listUsers();
     res.json({
-      users: users.map((user) => ({
-        id: user.id,
-        username: user.username,
-        displayName: user.display_name,
-        role: user.role,
-        enabled: Boolean(user.enabled),
-        defaultDataSourceId: user.default_data_source_id || null,
-        defaultDataSourceName: user.default_data_source_name || '',
-        createdAt: user.created_at,
-        updatedAt: user.updated_at
-      }))
+      users: users.map(serializeUser)
     });
   } catch (error) {
     next(error);
@@ -206,8 +261,120 @@ router.put('/users/:id', async (req, res, next) => {
       res.status(400).json({ message: '用户配置不完整' });
       return;
     }
-    const user = await updateUser({ id: Number(req.params.id), ...parsed.data });
+    const targetId = Number(req.params.id);
+    const users = await listUsers();
+    const target = users.find((item) => item.id === targetId);
+    if (!target) {
+      res.status(404).json({ message: '用户不存在' });
+      return;
+    }
+    const enabledAdmins = users.filter((item) => item.role === 'admin' && item.enabled === 1);
+    const isRemovingLastAdmin = target.role === 'admin'
+      && target.enabled === 1
+      && (parsed.data.role !== 'admin' || !parsed.data.enabled)
+      && enabledAdmins.length <= 1;
+    if (isRemovingLastAdmin) {
+      res.status(400).json({ message: '至少需要保留一个启用的管理员账号，避免无法管理权限' });
+      return;
+    }
+    const user = await updateUser({ id: targetId, ...parsed.data });
     res.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/permissions', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以管理权限' });
+      return;
+    }
+    const subjectType = String(req.query.subjectType || 'user') as PermissionSubjectType;
+    const subjectId = String(req.query.subjectId || '');
+    if (!['role', 'user'].includes(subjectType) || !subjectId) {
+      res.status(400).json({ message: '请选择权限对象' });
+      return;
+    }
+
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const targetUser = subjectType === 'user' ? (await listUsers()).find((user) => String(user.id) === subjectId) : undefined;
+    if (subjectType === 'user' && !targetUser) {
+      res.status(404).json({ message: '用户不存在' });
+      return;
+    }
+    const role = subjectType === 'role' ? subjectId as any : targetUser!.role;
+    const userId = subjectType === 'role' ? -1 : Number(subjectId);
+    const explicitRows = await listModulePermissions(subjectType, subjectId);
+    const explicitKeys = new Set(explicitRows.map((row) => row.module_key));
+    const permissions = await Promise.all(modules.map(async (module) => {
+      const permission = await getModulePermission({
+        userId,
+        role,
+        module: { key: module.key, enabled: module.enabled, editable: module.editable }
+      });
+      return {
+        moduleKey: module.key,
+        moduleTitle: module.title,
+        category: module.category,
+        explicit: explicitKeys.has(module.key),
+        ...permission
+      };
+    }));
+    res.json({ permissions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/permissions', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以管理权限' });
+      return;
+    }
+    const parsed = permissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '权限配置不完整' });
+      return;
+    }
+    const permissions = await replaceModulePermissions(
+      parsed.data.subjectType,
+      parsed.data.subjectId,
+      parsed.data.permissions
+    );
+    res.json({ permissions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/enterprise-members/sync', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有超级管理员可以同步企业成员' });
+      return;
+    }
+    const client = await getDataSourceClient(req.user!.dataSourceId) as any;
+    if (typeof client.listEnterpriseMembers !== 'function') {
+      res.status(400).json({ message: '当前数据源暂不支持企业成员同步' });
+      return;
+    }
+    const members = await client.listEnterpriseMembers();
+    const result = await upsertEnterpriseMembers(members.map((member: any) => ({
+      provider: req.user!.platform,
+      providerUserId: member.providerUserId,
+      unionId: member.unionId,
+      openId: member.openId,
+      name: member.name,
+      avatar: member.avatar,
+      mobile: member.mobile,
+      email: member.email,
+      department: member.department,
+      raw: member.raw
+    })));
+    const users = await listUsers();
+    res.json({ ...result, users: users.map(serializeUser) });
   } catch (error) {
     next(error);
   }
@@ -216,11 +383,7 @@ router.put('/users/:id', async (req, res, next) => {
 router.get('/modules', async (req, res, next) => {
   try {
     const modules = await listModules({ enabledOnly: true, dataSourceId: req.user!.dataSourceId });
-    res.json({
-      modules: modules
-        .filter((item) => canRead(req.user!.role, item))
-        .map((item) => ({ ...item, canEdit: canEdit(req.user!.role, item) }))
-    });
+    res.json({ modules: await readableModules(req.user!, modules) });
   } catch (error) {
     next(error);
   }
@@ -229,11 +392,7 @@ router.get('/modules', async (req, res, next) => {
 router.get('/project-modules', async (req, res, next) => {
   try {
     const modules = await listModules({ category: 'project', enabledOnly: true, dataSourceId: req.user!.dataSourceId });
-    res.json({
-      modules: modules
-        .filter((item) => canRead(req.user!.role, item))
-        .map((item) => ({ ...item, canEdit: canEdit(req.user!.role, item) }))
-    });
+    res.json({ modules: await readableModules(req.user!, modules) });
   } catch (error) {
     next(error);
   }
@@ -242,7 +401,7 @@ router.get('/project-modules', async (req, res, next) => {
 router.get('/staff-options', async (req, res, next) => {
   try {
     const staffModule = await findModule('staff');
-    if (!staffModule || !canRead(req.user!.role, staffModule)) {
+    if (!staffModule || !(await modulePermission(req.user!, staffModule)).canView) {
       res.status(404).json({ message: '人员信息模块不存在或无权访问' });
       return;
     }
@@ -258,8 +417,10 @@ router.get('/staff-options', async (req, res, next) => {
 
 router.get('/dashboard/summary', async (req, res, next) => {
   try {
-    const projectModules = (await listModules({ category: 'project', enabledOnly: true, dataSourceId: req.user!.dataSourceId }))
-      .filter((item) => canRead(req.user!.role, item));
+    const projectModules = await readableModules(
+      req.user!,
+      await listModules({ category: 'project', enabledOnly: true, dataSourceId: req.user!.dataSourceId })
+    );
     const moduleStats: Array<{
       key: string;
       title: string;
@@ -349,7 +510,7 @@ router.get('/dashboard/summary', async (req, res, next) => {
         developingItems: developingRows.map((row) => scheduleItem(module, row, 'developing')),
         testingItems: testingRows.map((row) => scheduleItem(module, row, 'testing')),
         error,
-        editable: canEdit(req.user!.role, module)
+        editable: module.canEdit
       });
     }
     const totalRows = moduleStats.reduce((sum, item) => sum + item.total, 0);
@@ -500,7 +661,16 @@ router.delete('/config/modules/:id', async (req, res, next) => {
       res.status(403).json({ message: '没有配置权限' });
       return;
     }
-    run('UPDATE module_configs SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [Number(req.params.id)]);
+    const moduleId = Number(req.params.id);
+    const rows = await all<{ module_key: string }>('SELECT module_key FROM module_configs WHERE id = ?', [moduleId]);
+    const moduleKey = rows[0]?.module_key;
+    if (!moduleKey) {
+      res.status(404).json({ message: '模块不存在' });
+      return;
+    }
+    run('DELETE FROM module_fields WHERE module_key = ?', [moduleKey]);
+    run('DELETE FROM module_permissions WHERE module_key = ?', [moduleKey]);
+    run('DELETE FROM module_configs WHERE id = ?', [moduleId]);
     res.status(204).send();
   } catch (error) {
     next(error);
@@ -583,13 +753,25 @@ router.get('/audit-logs', async (req, res) => {
 async function getModuleRows(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
-    if (!module || !canRead(req.user.role, module)) {
+    if (!module) {
+      res.status(404).json({ message: '模块不存在或无权访问' });
+      return;
+    }
+    const decorated = await decorateModule(req.user, module);
+    if (!decorated.canView) {
       res.status(404).json({ message: '模块不存在或无权访问' });
       return;
     }
     const client = await getClientForModule(module, req.user.dataSourceId);
     const rows = await client.getRows(module);
-    res.json({ module, canEdit: canEdit(req.user.role, module), rows });
+    res.json({
+      module: decorated,
+      canEdit: decorated.canEdit,
+      canCreate: decorated.canCreate,
+      canUpdate: decorated.canUpdate,
+      canDelete: decorated.canDelete,
+      rows
+    });
   } catch (error) {
     next(error);
   }
@@ -598,7 +780,7 @@ async function getModuleRows(req: any, res: any, next: any) {
 async function createModuleRow(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
-    if (!module || !canEdit(req.user.role, module)) {
+    if (!module || !(await modulePermission(req.user, module)).canCreate) {
       res.status(403).json({ message: '没有新增权限' });
       return;
     }
@@ -614,11 +796,17 @@ async function createModuleRow(req: any, res: any, next: any) {
 async function updateModuleRow(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
-    if (!module || !canEdit(req.user.role, module)) {
+    if (!module || !(await modulePermission(req.user, module)).canUpdate) {
       res.status(403).json({ message: '没有编辑权限' });
       return;
     }
     const client = await getClientForModule(module, req.user.dataSourceId);
+    const rows = await client.getRows(module);
+    const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
+    if (isCompletedRow(current)) {
+      res.status(403).json({ message: '已完成的数据不能编辑' });
+      return;
+    }
     const row = await client.updateRow(module, req.params.rowId, req.body);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload: req.body });
     res.json({ row });
@@ -630,11 +818,17 @@ async function updateModuleRow(req: any, res: any, next: any) {
 async function deleteModuleRow(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
-    if (!module || !canEdit(req.user.role, module)) {
+    if (!module || !(await modulePermission(req.user, module)).canDelete) {
       res.status(403).json({ message: '没有删除权限' });
       return;
     }
     const client = await getClientForModule(module, req.user.dataSourceId);
+    const rows = await client.getRows(module);
+    const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
+    if (isCompletedRow(current)) {
+      res.status(403).json({ message: '已完成的数据不能删除' });
+      return;
+    }
     await client.deleteRow(module, req.params.rowId);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'delete', rowId: req.params.rowId });
     res.status(204).send();
@@ -653,4 +847,8 @@ function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {
     dataSourceId: input.dataSourceId ?? undefined,
     sheetId: input.sheetId || undefined
   };
+}
+
+function isCompletedRow(row: any) {
+  return ['是', '已完成', '完成', 'true'].includes(String(row?.isCompleted ?? '').trim().toLowerCase());
 }

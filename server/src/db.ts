@@ -35,6 +35,39 @@ export interface UserIdentityRecord {
   updated_at?: string;
 }
 
+export type PermissionSubjectType = 'role' | 'user';
+
+export interface ModulePermissionRecord {
+  subject_type: PermissionSubjectType;
+  subject_id: string;
+  module_key: string;
+  can_view: number;
+  can_create: number;
+  can_update: number;
+  can_delete: number;
+}
+
+export interface ModulePermissionInput {
+  moduleKey: string;
+  canView: boolean;
+  canCreate: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
+}
+
+export interface EnterpriseMemberInput {
+  provider: IdentityProvider;
+  providerUserId: string;
+  unionId?: string;
+  openId?: string;
+  name: string;
+  avatar?: string;
+  mobile?: string;
+  email?: string;
+  department?: string;
+  raw?: unknown;
+}
+
 const dbPath = path.resolve(process.cwd(), 'server-data.db');
 let db: Database;
 
@@ -174,6 +207,22 @@ export async function initDatabase() {
   `);
 
   run(`
+    CREATE TABLE IF NOT EXISTS module_permissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject_type TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      module_key TEXT NOT NULL,
+      can_view INTEGER NOT NULL DEFAULT 1,
+      can_create INTEGER NOT NULL DEFAULT 0,
+      can_update INTEGER NOT NULL DEFAULT 0,
+      can_delete INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(subject_type, subject_id, module_key)
+    )
+  `);
+
+  run(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -217,7 +266,8 @@ async function seedConfigTables() {
       workbookId: process.env.DINGTALK_WORKBOOK_ID || '',
       operatorId: process.env.DINGTALK_OPERATOR_ID || '',
       baseUrl: process.env.DINGTALK_API_BASE_URL || 'https://api.dingtalk.com',
-      loginEnabled: 'true'
+      loginEnabled: 'true',
+      localLoginEnabled: process.env.LOCAL_LOGIN_ENABLED || 'false'
     };
     run('INSERT INTO data_source_instances (name, platform, config_json, enabled, sort_order) VALUES (?, ?, ?, ?, ?)', [
       '钉钉-项目管理表',
@@ -332,6 +382,73 @@ export async function getUserDataSourcePreference(userId: number) {
   );
 }
 
+function defaultModulePermission(role: UserRole, module: { enabled: boolean; editable: boolean }) {
+  const canEdit = module.enabled && module.editable && (role === 'admin' || role === 'editor');
+  return {
+    canView: module.enabled,
+    canCreate: canEdit,
+    canUpdate: canEdit,
+    canDelete: canEdit
+  };
+}
+
+function normalizePermission(row: ModulePermissionRecord | undefined, fallback: ReturnType<typeof defaultModulePermission>) {
+  if (!row) return fallback;
+  return {
+    canView: Boolean(row.can_view),
+    canCreate: Boolean(row.can_create),
+    canUpdate: Boolean(row.can_update),
+    canDelete: Boolean(row.can_delete)
+  };
+}
+
+export async function getModulePermission(input: {
+  userId: number;
+  role: UserRole;
+  module: { key: string; enabled: boolean; editable: boolean };
+}) {
+  const fallback = defaultModulePermission(input.role, input.module);
+  const userPermission = await get<ModulePermissionRecord>(
+    'SELECT * FROM module_permissions WHERE subject_type = ? AND subject_id = ? AND module_key = ?',
+    ['user', String(input.userId), input.module.key]
+  );
+  if (userPermission) return normalizePermission(userPermission, fallback);
+
+  const rolePermission = await get<ModulePermissionRecord>(
+    'SELECT * FROM module_permissions WHERE subject_type = ? AND subject_id = ? AND module_key = ?',
+    ['role', input.role, input.module.key]
+  );
+  return normalizePermission(rolePermission, fallback);
+}
+
+export async function listModulePermissions(subjectType: PermissionSubjectType, subjectId: string) {
+  return all<ModulePermissionRecord>(
+    'SELECT * FROM module_permissions WHERE subject_type = ? AND subject_id = ? ORDER BY module_key',
+    [subjectType, subjectId]
+  );
+}
+
+export async function replaceModulePermissions(subjectType: PermissionSubjectType, subjectId: string, permissions: ModulePermissionInput[]) {
+  run('DELETE FROM module_permissions WHERE subject_type = ? AND subject_id = ?', [subjectType, subjectId]);
+  for (const permission of permissions) {
+    run(
+      `INSERT INTO module_permissions
+       (subject_type, subject_id, module_key, can_view, can_create, can_update, can_delete)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        subjectType,
+        subjectId,
+        permission.moduleKey,
+        permission.canView ? 1 : 0,
+        permission.canCreate ? 1 : 0,
+        permission.canUpdate ? 1 : 0,
+        permission.canDelete ? 1 : 0
+      ]
+    );
+  }
+  return listModulePermissions(subjectType, subjectId);
+}
+
 export async function findIdentity(provider: IdentityProvider, providerUserId: string) {
   return get<UserIdentityRecord>('SELECT * FROM user_identities WHERE provider = ? AND provider_user_id = ?', [provider, providerUserId]);
 }
@@ -410,6 +527,72 @@ export async function upsertOAuthUser(input: {
   } catch (error: any) {
     throw new Error(`创建用户失败：${error.message || error}`);
   }
+}
+
+export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) {
+  let created = 0;
+  let updated = 0;
+
+  for (const member of members) {
+    const existing = await findIdentity(member.provider, member.providerUserId);
+    if (existing) {
+      run(
+        'UPDATE user_identities SET union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [
+          member.unionId || null,
+          member.openId || null,
+          member.name || null,
+          member.avatar || null,
+          member.mobile || null,
+          member.email || null,
+          member.raw ? JSON.stringify(member.raw) : null,
+          existing.id
+        ]
+      );
+      run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+        member.name,
+        existing.user_id
+      ]);
+      updated += 1;
+      continue;
+    }
+
+    const baseUsername = `${member.provider}_${member.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
+    let username = baseUsername;
+    let suffix = 1;
+    while (await findUserByUsername(username)) {
+      username = `${baseUsername}_${suffix}`;
+      suffix += 1;
+    }
+
+    run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+      username,
+      null,
+      'viewer',
+      member.name || username,
+      1
+    ]);
+    const user = await findUserByUsername(username);
+    if (!user) continue;
+    run(
+      'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        user.id,
+        member.provider,
+        member.providerUserId,
+        member.unionId || null,
+        member.openId || null,
+        member.name || null,
+        member.avatar || null,
+        member.mobile || null,
+        member.email || null,
+        member.raw ? JSON.stringify(member.raw) : null
+      ]
+    );
+    created += 1;
+  }
+
+  return { total: members.length, created, updated };
 }
 
 export async function addAuditLog(input: {

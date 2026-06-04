@@ -9,6 +9,18 @@ interface FeishuConfig {
   baseUrl?: string;
 }
 
+interface EnterpriseMember {
+  providerUserId: string;
+  unionId?: string;
+  openId?: string;
+  name: string;
+  avatar?: string;
+  mobile?: string;
+  email?: string;
+  department?: string;
+  raw?: unknown;
+}
+
 function columnName(index: number) {
   let name = '';
   let n = index + 1;
@@ -40,6 +52,48 @@ export class FeishuSheetClient {
 
   get isConfigured() {
     return Boolean(this.config.appId && this.config.appSecret && this.config.spreadsheetToken);
+  }
+
+  async listEnterpriseMembers(): Promise<EnterpriseMember[]> {
+    if (!this.config.appId || !this.config.appSecret) return [];
+    const token = await this.getAccessToken();
+    const members: EnterpriseMember[] = [];
+    let pageToken = '';
+
+    while (true) {
+      const response = await this.http.get('/open-apis/contact/v3/users/find_by_department', {
+        headers: { Authorization: `Bearer ${token}` },
+        params: {
+          department_id: '0',
+          department_id_type: 'open_department_id',
+          user_id_type: 'open_id',
+          page_size: 50,
+          page_token: pageToken || undefined
+        }
+      });
+      const data = response.data?.data || {};
+      const items = data.items || [];
+      for (const user of items) {
+        const providerUserId = user.union_id || user.open_id || user.user_id;
+        if (!providerUserId) continue;
+        members.push({
+          providerUserId,
+          unionId: user.union_id,
+          openId: user.open_id,
+          name: user.name || user.en_name || providerUserId,
+          avatar: user.avatar?.avatar_origin || user.avatar_url,
+          mobile: user.mobile,
+          email: user.email,
+          department: Array.isArray(user.department_ids) ? user.department_ids.join(',') : undefined,
+          raw: user
+        });
+      }
+      if (!data.has_more) break;
+      pageToken = data.page_token;
+      if (!pageToken) break;
+    }
+
+    return members;
   }
 
   async listWorksheets() {
@@ -87,7 +141,9 @@ export class FeishuSheetClient {
     for (const field of module.fields) {
       if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
       const value = payload[field.key];
-      row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
+      row[field.key] = value === undefined || value === null || value === ''
+        ? (field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-')
+        : String(value);
     }
     await this.writeRow(module, current.rowNumber, row);
     return row;
@@ -151,7 +207,9 @@ export class FeishuSheetClient {
     const row: SheetRow = { id, rowNumber };
     for (const field of module.fields) {
       const value = payload[field.key];
-      row[field.key] = value === undefined || value === null || value === '' ? (field.type === 'date' ? '' : '-') : String(value);
+      row[field.key] = value === undefined || value === null || value === ''
+        ? (field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-')
+        : String(value);
     }
     return row;
   }
@@ -164,7 +222,7 @@ export class FeishuSheetClient {
     const values = [module.fields.map((field) => {
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
-      return field.type === 'date' ? '' : '-';
+      return field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-';
     })];
     await this.http.put(
       `/open-apis/sheets/v2/spreadsheets/${this.config.spreadsheetToken}/values`,
