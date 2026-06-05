@@ -98,6 +98,12 @@ export interface NotificationSettings {
   lastScheduledDate?: string;
 }
 
+export interface NotificationUserSettings {
+  enabled: boolean;
+  scheduledTime: string;
+  lastScheduledDate?: string;
+}
+
 export interface NotificationLog {
   id: number;
   channel: string;

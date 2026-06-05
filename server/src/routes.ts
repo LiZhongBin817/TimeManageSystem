@@ -30,9 +30,11 @@ import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontend
 import { buildDashboardSummary } from './services/dashboardSummary';
 import {
   getNotificationSettings,
+  getNotificationUserSettings,
   listNotificationLogs,
   pushDashboardNotification,
   saveNotificationSettings,
+  saveNotificationUserSettings,
   sendTestNotification
 } from './services/notification';
 import {
@@ -419,7 +421,7 @@ router.get('/staff-options', async (req, res, next) => {
       res.status(404).json({ message: '人员信息模块不存在或无权访问' });
       return;
     }
-    const client = await getClientForModule(staffModule, req.user!.dataSourceId);
+    const client = await getClientForModule(staffModule, req.user!.dataSourceId, req.user!);
     const rows = await client.getRows(staffModule);
     const unique = (key: string) =>
       Array.from(new Set(rows.map((row: any) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
@@ -439,11 +441,45 @@ router.get('/dashboard/summary', async (req, res, next) => {
 
 router.get('/notification/settings', async (req, res, next) => {
   try {
+    const settings = await getNotificationSettings();
     if (req.user!.role !== 'admin') {
-      res.status(403).json({ message: '没有消息推送查看权限' });
+      res.json({
+        settings: {
+          enabled: settings.enabled,
+          webhookUrl: settings.webhookUrl ? 'configured' : '',
+          secret: settings.secret ? 'configured' : '',
+          keywords: settings.keywords,
+          scheduledTime: settings.scheduledTime,
+          lastScheduledDate: settings.lastScheduledDate
+        }
+      });
       return;
     }
-    res.json({ settings: await getNotificationSettings() });
+    res.json({ settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/notification/my-settings', async (req, res, next) => {
+  try {
+    res.json({ settings: await getNotificationUserSettings(req.user!.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/notification/my-settings', async (req, res, next) => {
+  try {
+    const parsed = z.object({
+      enabled: z.boolean().default(false),
+      scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).default('09:00')
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '个人定时推送配置不完整' });
+      return;
+    }
+    res.json({ settings: await saveNotificationUserSettings(req.user!.id, parsed.data) });
   } catch (error) {
     next(error);
   }
@@ -486,7 +522,7 @@ router.post('/notification/test', async (req, res, next) => {
 
 router.post('/notification/push-dashboard', async (req, res, next) => {
   try {
-    if (!['admin', 'editor'].includes(req.user!.role)) {
+    if (false && !['admin', 'editor'].includes(req.user!.role)) {
       res.status(403).json({ message: '没有消息推送权限' });
       return;
     }
@@ -573,7 +609,7 @@ router.get('/dashboard/summary', async (req, res, next) => {
       let rows: Record<string, unknown>[] = [];
       let error: string | undefined;
       try {
-        const client = await getClientForModule(module, req.user!.dataSourceId);
+        const client = await getClientForModule(module, req.user!.dataSourceId, req.user!);
         rows = await client.getRows(module);
       } catch (failure: any) {
         error = failure.response?.data?.message || failure.message || '读取失败';
@@ -782,7 +818,7 @@ router.post('/config/modules/:id/sync', async (req, res, next) => {
       res.status(404).json({ message: '模块不存在' });
       return;
     }
-    const client = await getClientForModule(module, req.user!.dataSourceId) as any;
+    const client = await getClientForModule(module, req.user!.dataSourceId, req.user!) as any;
     if (typeof client.syncModule !== 'function') {
       res.json({ message: '当前平台暂不支持自动创建工作表，请手动创建后填写 sheetId。' });
       return;
@@ -855,7 +891,7 @@ async function getModuleRows(req: any, res: any, next: any) {
       res.status(404).json({ message: '模块不存在或无权访问' });
       return;
     }
-    const client = await getClientForModule(module, req.user.dataSourceId);
+    const client = await getClientForModule(module, req.user.dataSourceId, req.user);
     const rows = module.category === 'project'
       ? filterProjectRowsForUser(req.user, await client.getRows(module))
       : await client.getRows(module);
@@ -879,7 +915,7 @@ async function createModuleRow(req: any, res: any, next: any) {
       res.status(403).json({ message: '没有新增权限' });
       return;
     }
-    const client = await getClientForModule(module, req.user.dataSourceId);
+    const client = await getClientForModule(module, req.user.dataSourceId, req.user);
     const payload = module.category === 'project' ? forceOwnDeveloper(req.user, req.body) : req.body;
     const row = await client.createRow(module, payload);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'create', rowId: row.id, payload });
@@ -896,7 +932,7 @@ async function updateModuleRow(req: any, res: any, next: any) {
       res.status(403).json({ message: '没有编辑权限' });
       return;
     }
-    const client = await getClientForModule(module, req.user.dataSourceId);
+    const client = await getClientForModule(module, req.user.dataSourceId, req.user);
     const rows = await client.getRows(module);
     const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
     if (module.category === 'project' && !isOwnProjectRow(req.user, current)) {
@@ -924,7 +960,7 @@ async function deleteModuleRow(req: any, res: any, next: any) {
       res.status(403).json({ message: '没有删除权限' });
       return;
     }
-    const client = await getClientForModule(module, req.user.dataSourceId);
+    const client = await getClientForModule(module, req.user.dataSourceId, req.user);
     const rows = await client.getRows(module);
     const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
     if (module.category === 'project' && !isOwnProjectRow(req.user, current)) {
@@ -943,8 +979,8 @@ async function deleteModuleRow(req: any, res: any, next: any) {
   }
 }
 
-async function getClientForModule(module: ModuleConfig, selectedDataSourceId?: number) {
-  return getDataSourceClient(moduleDataSourceId(module, selectedDataSourceId));
+async function getClientForModule(module: ModuleConfig, selectedDataSourceId?: number, user?: NonNullable<Express.Request['user']>) {
+  return getDataSourceClient(moduleDataSourceId(module, selectedDataSourceId), user);
 }
 
 function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {

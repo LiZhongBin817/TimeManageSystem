@@ -13,11 +13,23 @@ export interface NotificationSettings {
   lastScheduledDate?: string;
 }
 
+export interface NotificationUserSettings {
+  enabled: boolean;
+  scheduledTime: string;
+  lastScheduledDate?: string;
+}
+
 interface NotificationSettingsRow {
   enabled: number;
   webhook_url?: string;
   secret?: string;
   keyword_json?: string;
+  scheduled_time?: string;
+  last_scheduled_date?: string;
+}
+
+interface NotificationUserSettingsRow {
+  enabled: number;
   scheduled_time?: string;
   last_scheduled_date?: string;
 }
@@ -46,6 +58,32 @@ function normalizeSettings(row?: NotificationSettingsRow): NotificationSettings 
 export async function getNotificationSettings() {
   const row = await get<NotificationSettingsRow>('SELECT * FROM notification_settings WHERE id = 1');
   return normalizeSettings(row);
+}
+
+function normalizeUserSettings(row?: NotificationUserSettingsRow): NotificationUserSettings {
+  return {
+    enabled: Boolean(row?.enabled),
+    scheduledTime: row?.scheduled_time || '09:00',
+    lastScheduledDate: row?.last_scheduled_date || ''
+  };
+}
+
+export async function getNotificationUserSettings(userId: number) {
+  const row = await get<NotificationUserSettingsRow>('SELECT * FROM notification_user_settings WHERE user_id = ?', [userId]);
+  return normalizeUserSettings(row);
+}
+
+export async function saveNotificationUserSettings(userId: number, input: NotificationUserSettings) {
+  run(
+    `INSERT INTO notification_user_settings (user_id, enabled, scheduled_time, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id) DO UPDATE SET
+       enabled = excluded.enabled,
+       scheduled_time = excluded.scheduled_time,
+       updated_at = CURRENT_TIMESTAMP`,
+    [userId, input.enabled ? 1 : 0, input.scheduledTime || '09:00']
+  );
+  return getNotificationUserSettings(userId);
 }
 
 export async function saveNotificationSettings(input: NotificationSettings) {
@@ -198,4 +236,11 @@ export async function pushDashboardNotification(user: AuthUser, action = 'manual
 
 export async function markScheduledSent(date: string) {
   run('UPDATE notification_settings SET last_scheduled_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1', [date]);
+}
+
+export async function markUserScheduledSent(userId: number, date: string) {
+  run('UPDATE notification_user_settings SET last_scheduled_date = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?', [
+    date,
+    userId
+  ]);
 }

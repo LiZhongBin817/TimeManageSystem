@@ -54,8 +54,8 @@ async function readableProjectModules(user: AuthUser) {
   return decorated.filter((module) => module.canView);
 }
 
-async function getClientForModule(module: ModuleConfig, selectedDataSourceId?: number) {
-  return getDataSourceClient(moduleDataSourceId(module, selectedDataSourceId));
+async function getClientForModule(module: ModuleConfig, user: AuthUser) {
+  return getDataSourceClient(moduleDataSourceId(module, user.dataSourceId), user);
 }
 
 export async function buildDashboardSummary(user: AuthUser) {
@@ -120,7 +120,7 @@ export async function buildDashboardSummary(user: AuthUser) {
     let rows: Record<string, unknown>[] = [];
     let error: string | undefined;
     try {
-      const client = await getClientForModule(module, user.dataSourceId);
+      const client = await getClientForModule(module, user);
       rows = filterProjectRowsForUser(user, await client.getRows(module));
     } catch (failure: any) {
       error = failure.response?.data?.message || failure.message || '读取失败';

@@ -263,6 +263,17 @@ export async function initDatabase() {
     )
   `);
 
+  run(`
+    CREATE TABLE IF NOT EXISTS notification_user_settings (
+      user_id INTEGER PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      scheduled_time TEXT NOT NULL DEFAULT '09:00',
+      last_scheduled_date TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   const notificationCount = await get<{ total: number }>('SELECT COUNT(*) as total FROM notification_settings');
   if (!notificationCount?.total) {
     run('INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time) VALUES (1, ?, ?, ?, ?, ?, ?)', [
@@ -419,6 +430,13 @@ export async function getUserDataSourcePreference(userId: number) {
   return get<{ data_source_id: number; platform?: string }>(
     'SELECT data_source_id, platform FROM user_data_source_preferences WHERE user_id = ?',
     [userId]
+  );
+}
+
+export async function getUserIdentityForProvider(userId: number, provider: IdentityProvider) {
+  return get<UserIdentityRecord>(
+    'SELECT * FROM user_identities WHERE user_id = ? AND provider = ? ORDER BY updated_at DESC, id DESC LIMIT 1',
+    [userId, provider]
   );
 }
 

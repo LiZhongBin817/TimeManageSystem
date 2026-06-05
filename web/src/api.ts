@@ -8,6 +8,7 @@ import type {
   ModulePermission,
   NotificationLog,
   NotificationSettings,
+  NotificationUserSettings,
   PermissionSubjectType,
   PlatformKey,
   SheetRow,
@@ -225,6 +226,16 @@ export async function getNotificationSettings() {
 
 export async function saveNotificationSettings(settings: NotificationSettings) {
   const { data } = await api.put<{ settings: NotificationSettings }>('/notification/settings', settings);
+  return data.settings;
+}
+
+export async function getNotificationUserSettings() {
+  const { data } = await api.get<{ settings: NotificationUserSettings }>('/notification/my-settings');
+  return data.settings;
+}
+
+export async function saveNotificationUserSettings(settings: NotificationUserSettings) {
+  const { data } = await api.put<{ settings: NotificationUserSettings }>('/notification/my-settings', settings);
   return data.settings;
 }
 

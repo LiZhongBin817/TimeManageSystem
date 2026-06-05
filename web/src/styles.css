@@ -786,6 +786,13 @@ body {
   justify-content: flex-start;
 }
 
+.subsection-title {
+  margin: 8px 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #10233f;
+}
+
 .notification-log-table {
   margin-top: 14px;
 }
@@ -811,6 +818,42 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));
   gap: 4px 14px;
+}
+
+.source-section-title {
+  margin: 10px 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #10233f;
+}
+
+.source-help {
+  margin-bottom: 14px;
+}
+
+.field-help {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #718096;
+}
+
+.advanced-source-config {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e5eaf3;
+  border-radius: 8px;
+  background: #fafcff;
+}
+
+.advanced-source-config summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #334155;
+}
+
+.advanced-source-config[open] summary {
+  margin-bottom: 12px;
 }
 
 .field-editor-header {

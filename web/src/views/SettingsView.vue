@@ -10,6 +10,7 @@ import {
   getMe,
   getNotificationLogs,
   getNotificationSettings,
+  getNotificationUserSettings,
   getPermissions,
   getUsers,
   pushDashboardNotification,
@@ -17,6 +18,7 @@ import {
   saveDataSourceInstance,
   saveModuleFields,
   saveNotificationSettings,
+  saveNotificationUserSettings,
   savePermissions,
   sendNotificationTest,
   syncEnterpriseMembers,
@@ -32,6 +34,7 @@ import type {
   ModulePermission,
   NotificationLog,
   NotificationSettings,
+  NotificationUserSettings,
   PermissionSubjectType,
   Role,
   User
@@ -49,6 +52,7 @@ const permissionSubjectType = ref<PermissionSubjectType>('user');
 const permissionSubjectId = ref('');
 const syncingMembers = ref(false);
 const notificationSaving = ref(false);
+const notificationUserSaving = ref(false);
 const notificationTesting = ref(false);
 const notificationPushing = ref(false);
 const sourceDialogOpen = ref(false);
@@ -71,11 +75,16 @@ const notificationForm = reactive<NotificationSettings>({
   scheduledTime: '09:00',
   lastScheduledDate: ''
 });
+const notificationUserForm = reactive<NotificationUserSettings>({
+  enabled: false,
+  scheduledTime: '09:00',
+  lastScheduledDate: ''
+});
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
 const sourceOptions = computed(() => sources.value.map((item) => ({ label: item.name, value: item.id })));
 const isAdmin = computed(() => me.value?.role === 'admin');
-const canUseNotification = computed(() => me.value?.role === 'admin');
+const canUseNotification = computed(() => Boolean(me.value));
 const roleOptions: Array<{ label: string; value: Role }> = [
   { label: '管理员', value: 'admin' },
   { label: '编辑者', value: 'editor' },
@@ -173,11 +182,25 @@ async function load() {
 async function loadNotificationConfig() {
   try {
     const settings = await getNotificationSettings();
+    const userSettings = await getNotificationUserSettings();
     Object.assign(notificationForm, settings);
+    Object.assign(notificationUserForm, userSettings);
     if (!notificationForm.keywords?.length) notificationForm.keywords = ['项目提醒'];
     if (isAdmin.value) notificationLogs.value = await getNotificationLogs();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '消息推送配置加载失败');
+  }
+}
+
+async function submitNotificationUserSettings() {
+  notificationUserSaving.value = true;
+  try {
+    Object.assign(notificationUserForm, await saveNotificationUserSettings(notificationUserForm));
+    ElMessage.success('个人定时推送配置已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '个人定时推送配置保存失败');
+  } finally {
+    notificationUserSaving.value = false;
   }
 }
 
@@ -455,6 +478,7 @@ onMounted(load);
 
         <el-tab-pane v-if="canUseNotification" label="消息推送" name="notification">
           <div class="notification-settings">
+            <div class="subsection-title">机器人配置</div>
             <el-form label-position="top">
               <div class="form-grid">
                 <el-form-item label="启用定时推送">
@@ -486,15 +510,38 @@ onMounted(load);
                 </el-form-item>
               </div>
             </el-form>
+            <el-alert
+              v-if="!isAdmin"
+              type="info"
+              :closable="false"
+              title="机器人 Webhook 和加签密钥由管理员统一维护，你可以配置个人定时推送并立即推送自己的任务汇总。"
+            />
+            <div class="subsection-title">个人定时推送</div>
+            <el-form label-position="top">
+              <div class="form-grid">
+                <el-form-item label="启用个人定时推送">
+                  <el-switch v-model="notificationUserForm.enabled" />
+                </el-form-item>
+                <el-form-item label="个人每日推送时间">
+                  <el-time-picker
+                    v-model="notificationUserForm.scheduledTime"
+                    class="full-field"
+                    format="HH:mm"
+                    value-format="HH:mm"
+                  />
+                </el-form-item>
+              </div>
+            </el-form>
             <div class="settings-actions notification-actions">
               <el-button v-if="isAdmin" type="primary" :loading="notificationSaving" @click="submitNotification">保存配置</el-button>
+              <el-button type="primary" plain :loading="notificationUserSaving" @click="submitNotificationUserSettings">保存个人定时</el-button>
               <el-button v-if="isAdmin" :loading="notificationTesting" @click="testNotification">发送测试消息</el-button>
               <el-button type="success" :icon="Bell" :loading="notificationPushing" @click="pushNotificationNow">立即推送汇总</el-button>
             </div>
             <el-alert
               type="info"
               :closable="false"
-              title="推送内容包含开发中汇总、测试中汇总、对应人员以及计划提测/实际提测/上线时间。"
+              title="管理员推送全部任务汇总；非管理员只推送研发人员为自己的开发中/测试中任务。"
             />
             <el-table v-if="isAdmin" :data="notificationLogs" stripe class="notification-log-table">
               <el-table-column prop="created_at" label="时间" min-width="170" />
@@ -571,47 +618,123 @@ onMounted(load);
 
     <el-dialog v-model="sourceDialogOpen" title="数据源实例" width="760px">
       <el-form label-position="top">
+        <div class="source-section-title">实例信息</div>
         <div class="form-grid">
-          <el-form-item label="实例名称" required><el-input v-model="sourceForm.name" /></el-form-item>
+          <el-form-item label="实例名称" required>
+            <el-input v-model="sourceForm.name" placeholder="例如：钉钉-项目管理表" />
+            <div class="field-help">登录、模块绑定和用户默认数据源中展示的名称，建议写清平台和用途。</div>
+          </el-form-item>
           <el-form-item label="平台" required>
             <el-select v-model="sourceForm.platform" class="full-field">
               <el-option label="钉钉" value="dingtalk" />
               <el-option label="飞书" value="feishu" />
             </el-select>
-          </el-form-item>
-          <el-form-item label="排序"><el-input-number v-model="sourceForm.sortOrder" class="full-field" /></el-form-item>
-          <el-form-item label="启用"><el-switch v-model="sourceForm.enabled" /></el-form-item>
-          <el-form-item label="启用备用登录">
-            <el-select v-model="sourceForm.config.localLoginEnabled" class="full-field">
-              <el-option label="启用" value="true" />
-              <el-option label="停用" value="false" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="启用企业登录">
-            <el-select v-model="sourceForm.config.loginEnabled" class="full-field">
-              <el-option label="启用" value="true" />
-              <el-option label="停用" value="false" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="OAuth 回调地址">
-            <el-input v-model="sourceForm.config.redirectUri" placeholder="不填则使用后端默认 callback" />
+            <div class="field-help">选择该实例使用的表格平台，平台不同，需要填写的接入信息也不同。</div>
           </el-form-item>
         </div>
+        <template v-if="isAdmin">
+          <div class="source-section-title">基础配置</div>
+          <el-alert
+            class="source-help"
+            type="info"
+            :closable="false"
+            title="基础配置用于控制这个数据源实例是否可用、登录方式以及排序。普通用户只使用管理员配置好的实例，不需要维护这些公共信息。"
+          />
+          <div class="form-grid">
+            <el-form-item label="排序">
+              <el-input-number v-model="sourceForm.sortOrder" class="full-field" />
+              <div class="field-help">数字越小越靠前，用于登录页和配置列表排序。</div>
+            </el-form-item>
+            <el-form-item label="启用">
+              <el-switch v-model="sourceForm.enabled" />
+              <div class="field-help">停用后该数据源不会出现在登录和业务读取中。</div>
+            </el-form-item>
+            <el-form-item label="启用备用登录">
+              <el-select v-model="sourceForm.config.localLoginEnabled" class="full-field">
+                <el-option label="启用" value="true" />
+                <el-option label="停用" value="false" />
+              </el-select>
+              <div class="field-help">是否允许账号密码登录。建议只在管理员应急维护时开启。</div>
+            </el-form-item>
+            <el-form-item label="启用企业登录">
+              <el-select v-model="sourceForm.config.loginEnabled" class="full-field">
+                <el-option label="启用" value="true" />
+                <el-option label="停用" value="false" />
+              </el-select>
+              <div class="field-help">是否允许使用钉钉或飞书登录进入系统。</div>
+            </el-form-item>
+            <el-form-item label="OAuth 回调地址">
+              <el-input v-model="sourceForm.config.redirectUri" placeholder="不填则使用后端默认 callback" />
+              <div class="field-help">只有需要覆盖后端环境变量时才填写；一般本地和部署环境分别用 .env 控制即可。</div>
+            </el-form-item>
+          </div>
+        </template>
+        <div class="source-section-title">平台接入配置</div>
+        <el-alert
+          class="source-help"
+          type="success"
+          :closable="false"
+          :title="sourceForm.platform === 'dingtalk'
+            ? '钉钉配置来自钉钉开放平台企业内部应用，以及需要读取的在线表格链接。'
+            : '飞书配置来自飞书开放平台应用，以及需要读取的电子表格链接。'"
+        />
         <div class="form-grid">
           <template v-if="sourceForm.platform === 'dingtalk'">
-            <el-form-item label="AppKey"><el-input v-model="sourceForm.config.appKey" /></el-form-item>
-            <el-form-item label="AppSecret"><el-input v-model="sourceForm.config.appSecret" show-password /></el-form-item>
-            <el-form-item label="CorpId"><el-input v-model="sourceForm.config.corpId" placeholder="企业 CorpId，可选但建议填写" /></el-form-item>
-            <el-form-item label="WorkbookId"><el-input v-model="sourceForm.config.workbookId" /></el-form-item>
-            <el-form-item label="OperatorId"><el-input v-model="sourceForm.config.operatorId" /></el-form-item>
+            <el-form-item label="钉钉表格 WorkbookId">
+              <el-input v-model="sourceForm.config.workbookId" />
+              <div class="field-help">每个数据源实例不同的在线表格工作簿 ID；AppKey、AppSecret、CorpId 会自动继承同平台已有配置。</div>
+            </el-form-item>
           </template>
           <template v-else>
-            <el-form-item label="AppId"><el-input v-model="sourceForm.config.appId" /></el-form-item>
-            <el-form-item label="AppSecret"><el-input v-model="sourceForm.config.appSecret" show-password /></el-form-item>
-            <el-form-item label="SpreadsheetToken"><el-input v-model="sourceForm.config.spreadsheetToken" /></el-form-item>
-            <el-form-item label="BaseUrl"><el-input v-model="sourceForm.config.baseUrl" placeholder="https://open.feishu.cn" /></el-form-item>
+            <el-form-item label="电子表格 Token">
+              <el-input v-model="sourceForm.config.spreadsheetToken" />
+              <div class="field-help">每个数据源实例不同的飞书电子表格 token；AppId、AppSecret 会自动继承同平台已有配置。</div>
+            </el-form-item>
           </template>
         </div>
+        <details v-if="isAdmin" class="advanced-source-config">
+          <summary>管理员高级配置：应用级公共信息</summary>
+          <el-alert
+            class="source-help"
+            type="warning"
+            :closable="false"
+            title="这些字段属于同一个应用平台的公共配置。新增同平台实例时可不填，系统会自动继承已有实例或 .env 环境变量。"
+          />
+          <div class="form-grid">
+            <template v-if="sourceForm.platform === 'dingtalk'">
+              <el-form-item label="钉钉 AppKey / Client ID">
+                <el-input v-model="sourceForm.config.appKey" />
+                <div class="field-help">钉钉开放平台“凭证与基础信息”中的 Client ID，用于登录授权和接口调用。</div>
+              </el-form-item>
+              <el-form-item label="钉钉 AppSecret / Client Secret">
+                <el-input v-model="sourceForm.config.appSecret" show-password />
+                <div class="field-help">钉钉应用密钥。新增同平台实例时不填会继承已有值。</div>
+              </el-form-item>
+              <el-form-item label="企业 CorpId">
+                <el-input v-model="sourceForm.config.corpId" placeholder="企业 CorpId，可选但建议填写" />
+                <div class="field-help">企业唯一标识，用于企业登录和同步成员等能力。</div>
+              </el-form-item>
+              <el-form-item label="备用 OperatorId">
+                <el-input v-model="sourceForm.config.operatorId" placeholder="可不填，优先使用登录用户身份" />
+                <div class="field-help">一般不需要手填。系统优先使用当前钉钉登录用户身份；无法识别时才回退到这里或环境变量。</div>
+              </el-form-item>
+            </template>
+            <template v-else>
+              <el-form-item label="飞书 AppId">
+                <el-input v-model="sourceForm.config.appId" />
+                <div class="field-help">飞书开放平台应用凭证。新增同平台实例时不填会继承已有值。</div>
+              </el-form-item>
+              <el-form-item label="飞书 AppSecret">
+                <el-input v-model="sourceForm.config.appSecret" show-password />
+                <div class="field-help">飞书应用密钥，只保存在后端配置中。</div>
+              </el-form-item>
+              <el-form-item label="接口 BaseUrl">
+                <el-input v-model="sourceForm.config.baseUrl" placeholder="https://open.feishu.cn" />
+                <div class="field-help">默认使用飞书开放平台官方地址，私有化或特殊网关场景才需要调整。</div>
+              </el-form-item>
+            </template>
+          </div>
+        </details>
       </el-form>
       <template #footer>
         <el-button @click="sourceDialogOpen = false">取消</el-button>

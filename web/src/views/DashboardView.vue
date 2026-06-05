@@ -127,7 +127,7 @@ onMounted(load);
         <el-tag :type="summary?.source === 'feishu' ? 'primary' : 'success'">
           {{ summary?.source === 'feishu' ? '飞书实时数据' : '钉钉实时数据' }}
         </el-tag>
-        <el-button v-if="user?.role === 'admin' || user?.role === 'editor'" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
+        <el-button v-if="user" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
           推送到钉钉
         </el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>

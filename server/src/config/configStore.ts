@@ -124,12 +124,60 @@ export async function getDataSource(id?: number) {
   return row ? parseDataSource(row) : undefined;
 }
 
+const sharedConfigKeys: Record<DataSourceInstance['platform'], string[]> = {
+  dingtalk: ['appKey', 'appSecret', 'corpId', 'realmCorpId', 'baseUrl', 'loginEnabled', 'localLoginEnabled', 'redirectUri', 'operatorId'],
+  feishu: ['appId', 'appSecret', 'baseUrl', 'loginEnabled', 'localLoginEnabled', 'redirectUri']
+};
+
+function envSharedConfig(platform: DataSourceInstance['platform']): Record<string, string> {
+  if (platform === 'dingtalk') {
+    return {
+      appKey: process.env.DINGTALK_APP_KEY || '',
+      appSecret: process.env.DINGTALK_APP_SECRET || '',
+      corpId: process.env.DINGTALK_CORP_ID || '',
+      baseUrl: process.env.DINGTALK_API_BASE_URL || 'https://api.dingtalk.com',
+      loginEnabled: 'true',
+      localLoginEnabled: process.env.LOCAL_LOGIN_ENABLED || 'false',
+      operatorId: process.env.DINGTALK_OPERATOR_ID || ''
+    };
+  }
+  return {
+    appId: process.env.FEISHU_APP_ID || '',
+    appSecret: process.env.FEISHU_APP_SECRET || '',
+    baseUrl: process.env.FEISHU_BASE_URL || 'https://open.feishu.cn',
+    loginEnabled: 'true',
+    localLoginEnabled: process.env.LOCAL_LOGIN_ENABLED || 'false'
+  };
+}
+
+async function inheritSharedConfig(input: Partial<DataSourceInstance> & { platform: DataSourceInstance['platform']; config: Record<string, string> }) {
+  const inherited = envSharedConfig(input.platform);
+  const rows = await all<any>(
+    `SELECT * FROM data_source_instances
+     WHERE platform = ? ${input.id ? 'AND id <> ?' : ''}
+     ORDER BY sort_order, id
+     LIMIT 1`,
+    input.id ? [input.platform, input.id] : [input.platform]
+  );
+  const existing = rows[0] ? parseDataSource(rows[0]).config : {};
+  const config = { ...input.config };
+
+  for (const key of sharedConfigKeys[input.platform]) {
+    const current = String(config[key] || '').trim();
+    if (current) continue;
+    config[key] = String(existing[key] || inherited[key] || '');
+  }
+
+  return config;
+}
+
 export async function saveDataSource(input: Partial<DataSourceInstance> & { name: string; platform: 'dingtalk' | 'feishu'; config: Record<string, string> }) {
+  const config = await inheritSharedConfig(input);
   if (input.id) {
     run('UPDATE data_source_instances SET name = ?, platform = ?, config_json = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
       input.name,
       input.platform,
-      JSON.stringify(input.config || {}),
+      JSON.stringify(config),
       input.enabled === false ? 0 : 1,
       input.sortOrder ?? 0,
       input.id
@@ -139,7 +187,7 @@ export async function saveDataSource(input: Partial<DataSourceInstance> & { name
   run('INSERT INTO data_source_instances (name, platform, config_json, enabled, sort_order) VALUES (?, ?, ?, ?, ?)', [
     input.name,
     input.platform,
-    JSON.stringify(input.config || {}),
+    JSON.stringify(config),
     input.enabled === false ? 0 : 1,
     input.sortOrder ?? 0
   ]);
