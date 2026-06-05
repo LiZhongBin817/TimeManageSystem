@@ -167,6 +167,10 @@ body {
   width: 260px;
 }
 
+.ownership-alert {
+  flex-basis: 100%;
+}
+
 .module-select {
   width: 230px;
 }

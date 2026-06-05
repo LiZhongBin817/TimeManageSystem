@@ -2,6 +2,7 @@ import { AuthUser } from '../auth';
 import { ModuleConfig, listModules } from '../config/modules';
 import { getModulePermission } from '../db';
 import { getDataSourceClient, moduleDataSourceId } from '../dataSources';
+import { filterProjectRowsForUser } from './rowAccess';
 
 type ScheduleStatus = 'developing' | 'testing';
 
@@ -120,7 +121,7 @@ export async function buildDashboardSummary(user: AuthUser) {
     let error: string | undefined;
     try {
       const client = await getClientForModule(module, user.dataSourceId);
-      rows = await client.getRows(module);
+      rows = filterProjectRowsForUser(user, await client.getRows(module));
     } catch (failure: any) {
       error = failure.response?.data?.message || failure.message || '读取失败';
     }

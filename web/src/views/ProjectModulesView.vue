@@ -5,12 +5,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   createProjectRow,
   deleteProjectRow,
+  getMe,
   getProjectModules,
   getProjectRows,
   getStaffOptions,
   updateProjectRow
 } from '../api';
-import type { ModuleConfig, ModuleField, SheetRow } from '../types';
+import type { ModuleConfig, ModuleField, SheetRow, User } from '../types';
 
 const loading = ref(false);
 const modules = ref<ModuleConfig[]>([]);
@@ -19,6 +20,7 @@ const moduleConfig = ref<ModuleConfig>();
 const canCreate = ref(false);
 const canUpdate = ref(false);
 const canDelete = ref(false);
+const user = ref<User>();
 const rows = ref<SheetRow[]>([]);
 const keyword = ref('');
 const filters = reactive({
@@ -35,6 +37,7 @@ const dialogOpen = ref(false);
 const editingRow = ref<SheetRow | null>(null);
 const form = reactive<Record<string, string | number>>({});
 const staffOptions = ref({ product: [] as string[], tester: [] as string[], developer: [] as string[] });
+const isRestrictedUser = computed(() => user.value?.role !== 'admin');
 
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
@@ -129,6 +132,7 @@ async function loadRows() {
 async function refreshAll() {
   loading.value = true;
   try {
+    if (!user.value) user.value = await getMe();
     await loadModules();
     await loadRows();
   } catch (error: any) {
@@ -145,6 +149,7 @@ function openCreate() {
     const maxSequence = rows.value.reduce((max, row) => Math.max(max, Number(row.sequence) || 0), 0);
     form.sequence = maxSequence + 1;
   }
+  if (isRestrictedUser.value && hasField('developer')) form.developer = user.value?.displayName || '';
   dialogOpen.value = true;
 }
 
@@ -225,6 +230,13 @@ onMounted(refreshAll);
     </div>
 
     <section class="filter-panel">
+      <el-alert
+        v-if="isRestrictedUser"
+        type="info"
+        :closable="false"
+        class="ownership-alert"
+        :title="`当前仅显示研发人员为 ${user?.displayName || '-'} 的项目数据`"
+      />
       <el-input v-if="hasField('content')" v-model="filters.content" class="filter-item" placeholder="按内容过滤" clearable />
       <el-select v-if="hasField('isCompleted')" v-model="filters.isCompleted" class="filter-item" placeholder="是否完成" clearable>
         <el-option label="是" value="是" />
@@ -275,7 +287,7 @@ onMounted(refreshAll);
             <el-option label="是" value="是" />
             <el-option label="否" value="否" />
           </el-select>
-          <el-select v-else-if="field.type === 'staff'" v-model="form[field.key]" class="full-field" allow-create filterable clearable>
+          <el-select v-else-if="field.type === 'staff'" v-model="form[field.key]" class="full-field" allow-create filterable clearable :disabled="isRestrictedUser && field.key === 'developer'">
             <el-option v-for="name in fieldOptions(field)" :key="name" :label="name" :value="name" />
           </el-select>
           <el-input v-else-if="field.key === 'remark' || field.key === 'content'" v-model="form[field.key]" type="textarea" :rows="3" />

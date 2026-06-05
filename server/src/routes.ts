@@ -35,6 +35,12 @@ import {
   saveNotificationSettings,
   sendTestNotification
 } from './services/notification';
+import {
+  assertOwnDeveloperPayload,
+  filterProjectRowsForUser,
+  forceOwnDeveloper,
+  isOwnProjectRow
+} from './services/rowAccess';
 
 export const router = Router();
 
@@ -850,7 +856,9 @@ async function getModuleRows(req: any, res: any, next: any) {
       return;
     }
     const client = await getClientForModule(module, req.user.dataSourceId);
-    const rows = await client.getRows(module);
+    const rows = module.category === 'project'
+      ? filterProjectRowsForUser(req.user, await client.getRows(module))
+      : await client.getRows(module);
     res.json({
       module: decorated,
       canEdit: decorated.canEdit,
@@ -872,8 +880,9 @@ async function createModuleRow(req: any, res: any, next: any) {
       return;
     }
     const client = await getClientForModule(module, req.user.dataSourceId);
-    const row = await client.createRow(module, req.body);
-    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'create', rowId: row.id, payload: req.body });
+    const payload = module.category === 'project' ? forceOwnDeveloper(req.user, req.body) : req.body;
+    const row = await client.createRow(module, payload);
+    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'create', rowId: row.id, payload });
     res.status(201).json({ row });
   } catch (error) {
     next(error);
@@ -890,12 +899,18 @@ async function updateModuleRow(req: any, res: any, next: any) {
     const client = await getClientForModule(module, req.user.dataSourceId);
     const rows = await client.getRows(module);
     const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
+    if (module.category === 'project' && !isOwnProjectRow(req.user, current)) {
+      res.status(403).json({ message: '只能编辑研发人员为自己的项目数据' });
+      return;
+    }
     if (isCompletedRow(current)) {
       res.status(403).json({ message: '已完成的数据不能编辑' });
       return;
     }
-    const row = await client.updateRow(module, req.params.rowId, req.body);
-    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload: req.body });
+    const payload = module.category === 'project' ? forceOwnDeveloper(req.user, req.body) : req.body;
+    if (module.category === 'project') assertOwnDeveloperPayload(req.user, payload);
+    const row = await client.updateRow(module, req.params.rowId, payload);
+    await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload });
     res.json({ row });
   } catch (error) {
     next(error);
@@ -912,6 +927,10 @@ async function deleteModuleRow(req: any, res: any, next: any) {
     const client = await getClientForModule(module, req.user.dataSourceId);
     const rows = await client.getRows(module);
     const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
+    if (module.category === 'project' && !isOwnProjectRow(req.user, current)) {
+      res.status(403).json({ message: '只能删除研发人员为自己的项目数据' });
+      return;
+    }
     if (isCompletedRow(current)) {
       res.status(403).json({ message: '已完成的数据不能删除' });
       return;
