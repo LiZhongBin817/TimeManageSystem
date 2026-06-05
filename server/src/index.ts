@@ -3,6 +3,7 @@ import './env';
 import express, { NextFunction, Request, Response } from 'express';
 import { initDatabase } from './db';
 import { router } from './routes';
+import { startNotificationScheduler } from './services/notificationScheduler';
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
@@ -29,6 +30,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 initDatabase()
   .then(() => {
+    startNotificationScheduler();
     app.listen(port, () => {
       console.log(`API server listening on http://localhost:${port}`);
     });

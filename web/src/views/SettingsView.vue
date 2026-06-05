@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Delete, Edit, Plus, Refresh, Upload } from '@element-plus/icons-vue';
+import { Bell, Delete, Edit, Plus, Refresh, Upload } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { computed, onMounted, reactive, ref } from 'vue';
 import {
@@ -8,28 +8,49 @@ import {
   getConfigModules,
   getDataSourceInstances,
   getMe,
+  getNotificationLogs,
+  getNotificationSettings,
   getPermissions,
   getUsers,
+  pushDashboardNotification,
   saveConfigModule,
   saveDataSourceInstance,
   saveModuleFields,
+  saveNotificationSettings,
   savePermissions,
+  sendNotificationTest,
   syncEnterpriseMembers,
   syncConfigModule,
   updateManagedUser
 } from '../api';
-import type { DataSourceInstance, FieldType, ManagedUser, ModuleConfig, ModuleField, ModulePermission, PermissionSubjectType, Role, User } from '../types';
+import type {
+  DataSourceInstance,
+  FieldType,
+  ManagedUser,
+  ModuleConfig,
+  ModuleField,
+  ModulePermission,
+  NotificationLog,
+  NotificationSettings,
+  PermissionSubjectType,
+  Role,
+  User
+} from '../types';
 
 const loading = ref(false);
 const sources = ref<DataSourceInstance[]>([]);
 const modules = ref<ModuleConfig[]>([]);
 const users = ref<ManagedUser[]>([]);
 const permissions = ref<ModulePermission[]>([]);
+const notificationLogs = ref<NotificationLog[]>([]);
 const me = ref<User>();
 const activeTab = ref('sources');
 const permissionSubjectType = ref<PermissionSubjectType>('user');
 const permissionSubjectId = ref('');
 const syncingMembers = ref(false);
+const notificationSaving = ref(false);
+const notificationTesting = ref(false);
+const notificationPushing = ref(false);
 const sourceDialogOpen = ref(false);
 const moduleDialogOpen = ref(false);
 const userDialogOpen = ref(false);
@@ -42,10 +63,19 @@ const userForm = reactive<Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'ena
   enabled: true,
   defaultDataSourceId: null
 });
+const notificationForm = reactive<NotificationSettings>({
+  enabled: false,
+  webhookUrl: '',
+  secret: '',
+  keywords: ['项目提醒'],
+  scheduledTime: '09:00',
+  lastScheduledDate: ''
+});
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
 const sourceOptions = computed(() => sources.value.map((item) => ({ label: item.name, value: item.id })));
 const isAdmin = computed(() => me.value?.role === 'admin');
+const canUseNotification = computed(() => me.value?.role === 'admin');
 const roleOptions: Array<{ label: string; value: Role }> = [
   { label: '管理员', value: 'admin' },
   { label: '编辑者', value: 'editor' },
@@ -127,6 +157,7 @@ async function load() {
     ]);
     sources.value = sourceList;
     modules.value = moduleList;
+    if (canUseNotification.value) await loadNotificationConfig();
     if (me.value.role === 'admin') {
       users.value = await getUsers();
       if (!permissionSubjectId.value) permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : 'admin';
@@ -136,6 +167,66 @@ async function load() {
     ElMessage.error(error.response?.data?.message || '配置加载失败');
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadNotificationConfig() {
+  try {
+    const settings = await getNotificationSettings();
+    Object.assign(notificationForm, settings);
+    if (!notificationForm.keywords?.length) notificationForm.keywords = ['项目提醒'];
+    if (isAdmin.value) notificationLogs.value = await getNotificationLogs();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '消息推送配置加载失败');
+  }
+}
+
+async function submitNotification() {
+  notificationSaving.value = true;
+  try {
+    notificationForm.keywords = notificationForm.keywords.map((item) => item.trim()).filter(Boolean);
+    if (!notificationForm.keywords.length) notificationForm.keywords = ['项目提醒'];
+    Object.assign(notificationForm, await saveNotificationSettings(notificationForm));
+    ElMessage.success('消息推送配置已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '消息推送配置保存失败');
+  } finally {
+    notificationSaving.value = false;
+  }
+}
+
+function addNotificationKeyword() {
+  notificationForm.keywords.push('');
+}
+
+function removeNotificationKeyword(index: number) {
+  notificationForm.keywords.splice(index, 1);
+  if (!notificationForm.keywords.length) notificationForm.keywords.push('');
+}
+
+async function testNotification() {
+  notificationTesting.value = true;
+  try {
+    await sendNotificationTest();
+    ElMessage.success('测试消息已发送');
+    await loadNotificationConfig();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '测试消息发送失败');
+  } finally {
+    notificationTesting.value = false;
+  }
+}
+
+async function pushNotificationNow() {
+  notificationPushing.value = true;
+  try {
+    const result = await pushDashboardNotification();
+    ElMessage.success(`已推送到钉钉：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
+    await loadNotificationConfig();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '推送失败');
+  } finally {
+    notificationPushing.value = false;
   }
 }
 
@@ -360,6 +451,62 @@ onMounted(load);
               </template>
             </el-table-column>
           </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="canUseNotification" label="消息推送" name="notification">
+          <div class="notification-settings">
+            <el-form label-position="top">
+              <div class="form-grid">
+                <el-form-item label="启用定时推送">
+                  <el-switch v-model="notificationForm.enabled" :disabled="!isAdmin" />
+                </el-form-item>
+                <el-form-item label="每日推送时间">
+                  <el-time-picker
+                    v-model="notificationForm.scheduledTime"
+                    class="full-field"
+                    format="HH:mm"
+                    value-format="HH:mm"
+                    :disabled="!isAdmin"
+                  />
+                </el-form-item>
+                <el-form-item label="钉钉机器人 Webhook">
+                  <el-input v-model="notificationForm.webhookUrl" :disabled="!isAdmin" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." />
+                </el-form-item>
+                <el-form-item label="加签 Secret">
+                  <el-input v-model="notificationForm.secret" :disabled="!isAdmin" show-password placeholder="SEC..." />
+                </el-form-item>
+                <el-form-item label="自定义关键词" class="notification-keyword-form">
+                  <div class="keyword-list">
+                    <div v-for="(_keyword, index) in notificationForm.keywords" :key="index" class="keyword-row">
+                      <el-input v-model="notificationForm.keywords[index]" :disabled="!isAdmin" placeholder="例如：项目提醒" />
+                      <el-button :icon="Delete" circle :disabled="!isAdmin || notificationForm.keywords.length <= 1" @click="removeNotificationKeyword(index)" />
+                    </div>
+                    <el-button v-if="isAdmin" size="small" :icon="Plus" @click="addNotificationKeyword">新增关键词</el-button>
+                  </div>
+                </el-form-item>
+              </div>
+            </el-form>
+            <div class="settings-actions notification-actions">
+              <el-button v-if="isAdmin" type="primary" :loading="notificationSaving" @click="submitNotification">保存配置</el-button>
+              <el-button v-if="isAdmin" :loading="notificationTesting" @click="testNotification">发送测试消息</el-button>
+              <el-button type="success" :icon="Bell" :loading="notificationPushing" @click="pushNotificationNow">立即推送汇总</el-button>
+            </div>
+            <el-alert
+              type="info"
+              :closable="false"
+              title="推送内容包含开发中汇总、测试中汇总、对应人员以及计划提测/实际提测/上线时间。"
+            />
+            <el-table v-if="isAdmin" :data="notificationLogs" stripe class="notification-log-table">
+              <el-table-column prop="created_at" label="时间" min-width="170" />
+              <el-table-column prop="action" label="类型" width="120" />
+              <el-table-column prop="status" label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.status === 'success' ? 'success' : 'danger'">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="message" label="消息" min-width="240" />
+            </el-table>
+          </div>
         </el-tab-pane>
 
         <el-tab-pane v-if="isAdmin" label="用户管理" name="users">

@@ -235,6 +235,46 @@ export async function initDatabase() {
     )
   `);
 
+  run(`
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      channel TEXT NOT NULL DEFAULT 'dingtalk_robot',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      webhook_url TEXT,
+      secret TEXT,
+      keyword_json TEXT,
+      scheduled_time TEXT,
+      last_scheduled_date TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await ensureColumn('notification_settings', 'keyword_json', 'TEXT');
+
+  run(`
+    CREATE TABLE IF NOT EXISTS notification_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      message TEXT,
+      payload TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const notificationCount = await get<{ total: number }>('SELECT COUNT(*) as total FROM notification_settings');
+  if (!notificationCount?.total) {
+    run('INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time) VALUES (1, ?, ?, ?, ?, ?, ?)', [
+      'dingtalk_robot',
+      0,
+      '',
+      '',
+      JSON.stringify(['项目提醒']),
+      '09:00'
+    ]);
+  }
+
   const count = await get<{ total: number }>('SELECT COUNT(*) as total FROM users');
   if (!count?.total) {
     const users = [
@@ -453,6 +493,28 @@ export async function findIdentity(provider: IdentityProvider, providerUserId: s
   return get<UserIdentityRecord>('SELECT * FROM user_identities WHERE provider = ? AND provider_user_id = ?', [provider, providerUserId]);
 }
 
+async function findReusableIdentity(member: EnterpriseMemberInput) {
+  const exact = await findIdentity(member.provider, member.providerUserId);
+  if (exact) return exact;
+
+  const candidates: Array<[string, string | undefined]> = [
+    ['union_id', member.unionId],
+    ['open_id', member.openId],
+    ['mobile', member.mobile],
+    ['email', member.email]
+  ];
+  for (const [column, value] of candidates) {
+    const cleanValue = String(value || '').trim();
+    if (!cleanValue) continue;
+    const identity = await get<UserIdentityRecord>(
+      `SELECT * FROM user_identities WHERE provider = ? AND ${column} = ? ORDER BY id LIMIT 1`,
+      [member.provider, cleanValue]
+    );
+    if (identity) return identity;
+  }
+  return undefined;
+}
+
 export async function upsertOAuthUser(input: {
   provider: IdentityProvider;
   providerUserId: string;
@@ -534,11 +596,12 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
   let updated = 0;
 
   for (const member of members) {
-    const existing = await findIdentity(member.provider, member.providerUserId);
+    const existing = await findReusableIdentity(member);
     if (existing) {
       run(
-        'UPDATE user_identities SET union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        'UPDATE user_identities SET provider_user_id = ?, union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         [
+          member.providerUserId,
           member.unionId || null,
           member.openId || null,
           member.name || null,
@@ -560,6 +623,30 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
     const baseUsername = `${member.provider}_${member.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
     let username = baseUsername;
     let suffix = 1;
+    const existingUserByName = await findUserByUsername(username);
+    if (existingUserByName) {
+      run(
+        'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          existingUserByName.id,
+          member.provider,
+          member.providerUserId,
+          member.unionId || null,
+          member.openId || null,
+          member.name || null,
+          member.avatar || null,
+          member.mobile || null,
+          member.email || null,
+          member.raw ? JSON.stringify(member.raw) : null
+        ]
+      );
+      run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+        member.name,
+        existingUserByName.id
+      ]);
+      updated += 1;
+      continue;
+    }
     while (await findUserByUsername(username)) {
       username = `${baseUsername}_${suffix}`;
       suffix += 1;

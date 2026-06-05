@@ -88,3 +88,22 @@ export interface SheetRow {
   rowNumber?: number;
   [key: string]: string | number | undefined;
 }
+
+export interface NotificationSettings {
+  enabled: boolean;
+  webhookUrl: string;
+  secret: string;
+  keywords: string[];
+  scheduledTime: string;
+  lastScheduledDate?: string;
+}
+
+export interface NotificationLog {
+  id: number;
+  channel: string;
+  action: string;
+  status: string;
+  message?: string;
+  payload?: string;
+  created_at: string;
+}

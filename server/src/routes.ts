@@ -27,6 +27,14 @@ import {
 } from './db';
 import { getDataSourceClient, moduleDataSourceId } from './dataSources';
 import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontendLoginErrorUrl } from './oauth/oauthClients';
+import { buildDashboardSummary } from './services/dashboardSummary';
+import {
+  getNotificationSettings,
+  listNotificationLogs,
+  pushDashboardNotification,
+  saveNotificationSettings,
+  sendTestNotification
+} from './services/notification';
 
 export const router = Router();
 
@@ -410,6 +418,85 @@ router.get('/staff-options', async (req, res, next) => {
     const unique = (key: string) =>
       Array.from(new Set(rows.map((row: any) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
     res.json({ product: unique('productOwner'), tester: unique('tester'), developer: unique('developer') });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/dashboard/summary', async (req, res, next) => {
+  try {
+    res.json(await buildDashboardSummary(req.user!));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/notification/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '没有消息推送查看权限' });
+      return;
+    }
+    res.json({ settings: await getNotificationSettings() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/notification/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以配置消息推送' });
+      return;
+    }
+    const parsed = z.object({
+      enabled: z.boolean().default(false),
+      webhookUrl: z.string().default(''),
+      secret: z.string().default(''),
+      keywords: z.array(z.string()).default([]),
+      scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).default('09:00')
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '消息推送配置不完整' });
+      return;
+    }
+    res.json({ settings: await saveNotificationSettings(parsed.data) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/notification/test', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以发送测试消息' });
+      return;
+    }
+    res.json({ result: await sendTestNotification() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/notification/push-dashboard', async (req, res, next) => {
+  try {
+    if (!['admin', 'editor'].includes(req.user!.role)) {
+      res.status(403).json({ message: '没有消息推送权限' });
+      return;
+    }
+    res.json(await pushDashboardNotification(req.user!, 'manual'));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/notification/logs', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以查看消息推送日志' });
+      return;
+    }
+    res.json({ logs: await listNotificationLogs() });
   } catch (error) {
     next(error);
   }

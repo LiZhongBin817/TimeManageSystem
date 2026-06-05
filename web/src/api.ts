@@ -6,6 +6,8 @@ import type {
   ModuleConfig,
   ModuleField,
   ModulePermission,
+  NotificationLog,
+  NotificationSettings,
   PermissionSubjectType,
   PlatformKey,
   SheetRow,
@@ -214,4 +216,29 @@ export async function savePermissions(subjectType: PermissionSubjectType, subjec
 export async function syncEnterpriseMembers() {
   const { data } = await api.post<{ total: number; created: number; updated: number; users: ManagedUser[] }>('/enterprise-members/sync');
   return data;
+}
+
+export async function getNotificationSettings() {
+  const { data } = await api.get<{ settings: NotificationSettings }>('/notification/settings');
+  return data.settings;
+}
+
+export async function saveNotificationSettings(settings: NotificationSettings) {
+  const { data } = await api.put<{ settings: NotificationSettings }>('/notification/settings', settings);
+  return data.settings;
+}
+
+export async function sendNotificationTest() {
+  const { data } = await api.post('/notification/test');
+  return data;
+}
+
+export async function pushDashboardNotification() {
+  const { data } = await api.post<{ summary: { developing: number; testing: number } }>('/notification/push-dashboard');
+  return data;
+}
+
+export async function getNotificationLogs() {
+  const { data } = await api.get<{ logs: NotificationLog[] }>('/notification/logs');
+  return data.logs;
 }

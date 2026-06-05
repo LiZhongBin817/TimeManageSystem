@@ -778,6 +778,31 @@ body {
   margin-bottom: 12px;
 }
 
+.notification-actions {
+  justify-content: flex-start;
+}
+
+.notification-log-table {
+  margin-top: 14px;
+}
+
+.notification-keyword-form {
+  grid-column: 1 / -1;
+}
+
+.keyword-list {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.keyword-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));

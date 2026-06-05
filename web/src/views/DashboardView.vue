@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Refresh } from '@element-plus/icons-vue';
+import { Bell, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
-import { getSummary } from '../api';
+import { getMe, getSummary, pushDashboardNotification } from '../api';
+import type { User } from '../types';
 
 interface ScheduleItem {
   id: string;
@@ -33,7 +34,9 @@ interface DeveloperStat {
 }
 
 const loading = ref(false);
+const pushing = ref(false);
 const summary = ref<any>();
+const user = ref<User>();
 
 const developingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.developingItems || []);
 const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.testingItems || []);
@@ -67,11 +70,24 @@ const maxDeveloperTotal = computed(() => Math.max(1, ...developerStats.value.map
 async function load() {
   loading.value = true;
   try {
+    if (!user.value) user.value = await getMe();
     summary.value = await getSummary();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '汇总数据加载失败');
   } finally {
     loading.value = false;
+  }
+}
+
+async function pushToDingTalk() {
+  pushing.value = true;
+  try {
+    const result = await pushDashboardNotification();
+    ElMessage.success(`已推送到钉钉：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '推送失败');
+  } finally {
+    pushing.value = false;
   }
 }
 
@@ -111,6 +127,9 @@ onMounted(load);
         <el-tag :type="summary?.source === 'feishu' ? 'primary' : 'success'">
           {{ summary?.source === 'feishu' ? '飞书实时数据' : '钉钉实时数据' }}
         </el-tag>
+        <el-button v-if="user?.role === 'admin' || user?.role === 'editor'" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
+          推送到钉钉
+        </el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
     </div>
