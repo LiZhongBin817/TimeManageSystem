@@ -16,6 +16,14 @@ interface WorksheetMeta {
   name: string;
 }
 
+const accessTokenCache = new Map<string, { value: string; expiresAt: number }>();
+const legacyAccessTokenCache = new Map<string, { value: string; expiresAt: number }>();
+const worksheetCache = new Map<string, { value: WorksheetMeta[]; expiresAt: number }>();
+const WORKSHEET_CACHE_TTL = 5 * 60 * 1000;
+const ROW_READ_CHUNK_SIZE = Number(process.env.DINGTALK_ROW_READ_CHUNK_SIZE || 150);
+const ROW_READ_MAX_ROW = Number(process.env.DINGTALK_ROW_READ_MAX_ROW || 2000);
+const ROW_READ_TAIL_WINDOW = Number(process.env.DINGTALK_ROW_READ_TAIL_WINDOW || 20);
+
 interface EnterpriseMember {
   providerUserId: string;
   unionId?: string;
@@ -47,7 +55,6 @@ function excelSerialToDate(value: number) {
 export class DingTalkSheetClient {
   private config: DingTalkConfig;
   private http: AxiosInstance;
-  private token?: { value: string; expiresAt: number };
   private memory = JSON.parse(JSON.stringify(mockRows)) as typeof mockRows;
 
   constructor(config?: Partial<DingTalkConfig>) {
@@ -113,6 +120,10 @@ export class DingTalkSheetClient {
       return Object.entries(mockRows).map(([key]) => ({ sheetId: key, name: key }));
     }
 
+    const cacheKey = this.worksheetCacheKey();
+    const cached = worksheetCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
     const token = await this.getAccessToken();
     const response = await this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets`, {
       headers: { 'x-acs-dingtalk-access-token': token },
@@ -120,10 +131,12 @@ export class DingTalkSheetClient {
     });
 
     const sheets = response.data?.sheets || response.data?.value || response.data?.data || [];
-    return sheets.map((sheet: any) => ({
+    const normalized = sheets.map((sheet: any) => ({
       sheetId: sheet.sheetId || sheet.id,
       name: sheet.name || sheet.sheetName
     }));
+    worksheetCache.set(cacheKey, { value: normalized, expiresAt: Date.now() + WORKSHEET_CACHE_TTL });
+    return normalized;
   }
 
   async syncModule(module: ModuleConfig) {
@@ -141,6 +154,7 @@ export class DingTalkSheetClient {
     if (!sheet) {
       sheet = await this.createWorksheet(module.sheetName);
       created = true;
+      worksheetCache.delete(this.worksheetCacheKey());
       await new Promise((resolve) => setTimeout(resolve, 800));
     }
 
@@ -157,26 +171,31 @@ export class DingTalkSheetClient {
     const sheetId = await this.resolveSheetId(module);
     const token = await this.getAccessToken();
     const lastColumn = columnName(module.fields.length - 1);
-    const range = `${module.sheetName}!A${module.dataStartRow}:${lastColumn}2000`;
-    const response = await this.withRetry(() =>
-      this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
-        headers: { 'x-acs-dingtalk-access-token': token },
-        params: { operatorId: this.config.operatorId }
-      })
-    );
+    const rows: SheetRow[] = [];
+    const chunkSize = Math.max(50, ROW_READ_CHUNK_SIZE);
+    const maxRow = Math.max(module.dataStartRow, ROW_READ_MAX_ROW);
+    const tailWindow = Math.max(5, ROW_READ_TAIL_WINDOW);
 
-    const values: unknown[][] = response.data?.values || response.data?.valueRange?.values || response.data?.data?.values || [];
-    return values
-      .map((cells, index) => this.cellsToRow(module, cells, module.dataStartRow + index))
-      .filter((row) => module.fields.some((field) => {
-        const value = String(row[field.key] ?? '').trim();
-        return value !== '' && value !== '-';
-      }));
+    for (let startRow = module.dataStartRow; startRow <= maxRow; startRow += chunkSize) {
+      const endRow = Math.min(startRow + chunkSize - 1, maxRow);
+      const values = await this.readRangeValues(module, sheetId, token, lastColumn, startRow, endRow);
+      if (!values.length) break;
+
+      const chunkRows = values.map((cells, index) => this.cellsToRow(module, cells, startRow + index));
+      rows.push(...chunkRows.filter((row) => this.hasRowContent(module, row)));
+
+      const lastContentIndex = chunkRows.reduce((last, row, index) => this.hasRowContent(module, row) ? index : last, -1);
+      const requestedRows = endRow - startRow + 1;
+      if (values.length < requestedRows || lastContentIndex < values.length - tailWindow) break;
+    }
+
+    return rows;
   }
 
-  async createRow(module: ModuleConfig, payload: Record<string, unknown>) {
-    const rows = await this.getRows(module);
-    const rowNumber = this.isConfigured ? await this.findWritableRow(module, rows.length + module.dataStartRow) : rows.length + module.dataStartRow;
+  async createRow(module: ModuleConfig, payload: Record<string, unknown>, existingRows?: SheetRow[]) {
+    const rows = existingRows || await this.getRows(module);
+    const lastRowNumber = rows.reduce((max, row) => Math.max(max, Number(row.rowNumber) || 0), module.dataStartRow - 1);
+    const rowNumber = lastRowNumber + 1;
     const row = this.normalizePayload(module, payload, `local-${Date.now()}`, rowNumber);
 
     if (!this.isConfigured) {
@@ -184,13 +203,12 @@ export class DingTalkSheetClient {
       return row;
     }
 
-    await this.writeRowWithPreviousFormulas(module, rowNumber, row);
+    await this.writeRowWithPreviousFormulas(module, rowNumber, row, lastRowNumber >= module.dataStartRow ? lastRowNumber : undefined);
     return row;
   }
 
-  async updateRow(module: ModuleConfig, rowId: string, payload: Record<string, unknown>) {
-    const rows = await this.getRows(module);
-    const current = rows.find((item) => item.id === rowId || String(item.rowNumber) === rowId);
+  async updateRow(module: ModuleConfig, rowId: string, payload: Record<string, unknown>, currentRow?: SheetRow) {
+    const current = currentRow || (await this.getRows(module)).find((item) => item.id === rowId || String(item.rowNumber) === rowId);
     if (!current) {
       throw new Error('未找到要更新的数据行');
     }
@@ -207,7 +225,7 @@ export class DingTalkSheetClient {
     return updated;
   }
 
-  async deleteRow(module: ModuleConfig, rowId: string) {
+  async deleteRow(module: ModuleConfig, rowId: string, currentRow?: SheetRow) {
     if (!this.isConfigured) {
       const list = this.memory[module.key as keyof typeof this.memory];
       const index = list.findIndex((item) => item.id === rowId || String(item.rowNumber) === rowId);
@@ -215,8 +233,7 @@ export class DingTalkSheetClient {
       return;
     }
 
-    const rows = await this.getRows(module);
-    const current = rows.find((item) => item.id === rowId || String(item.rowNumber) === rowId);
+    const current = currentRow || (await this.getRows(module)).find((item) => item.id === rowId || String(item.rowNumber) === rowId);
     if (!current?.rowNumber) {
       throw new Error('未找到要删除的数据行');
     }
@@ -246,9 +263,9 @@ export class DingTalkSheetClient {
   }
 
   private async getAccessToken() {
-    if (this.token && this.token.expiresAt > Date.now() + 60000) {
-      return this.token.value;
-    }
+    const cacheKey = this.tokenCacheKey();
+    const cached = accessTokenCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now() + 60000) return cached.value;
 
     const response = await this.http.post('/v1.0/oauth2/accessToken', {
       appKey: this.config.appKey,
@@ -256,11 +273,15 @@ export class DingTalkSheetClient {
     });
     const value = response.data?.accessToken;
     if (!value) throw new Error('钉钉 accessToken 获取失败');
-    this.token = { value, expiresAt: Date.now() + Number(response.data?.expireIn || 7200) * 1000 };
+    accessTokenCache.set(cacheKey, { value, expiresAt: Date.now() + Number(response.data?.expireIn || 7200) * 1000 });
     return value;
   }
 
   private async getLegacyAccessToken() {
+    const cacheKey = this.tokenCacheKey();
+    const cached = legacyAccessTokenCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now() + 60000) return cached.value;
+
     const response = await axios.get('https://oapi.dingtalk.com/gettoken', {
       params: { appkey: this.config.appKey, appsecret: this.config.appSecret },
       timeout: 12000
@@ -269,6 +290,7 @@ export class DingTalkSheetClient {
     if (!token || response.data?.errcode) {
       throw new Error(response.data?.errmsg || '钉钉通讯录 access_token 获取失败');
     }
+    legacyAccessTokenCache.set(cacheKey, { value: token, expiresAt: Date.now() + Number(response.data?.expires_in || 7200) * 1000 });
     return token;
   }
 
@@ -332,6 +354,17 @@ export class DingTalkSheetClient {
     await this.writeRawValues(module, module.headerRow, values);
   }
 
+  private async readRangeValues(module: ModuleConfig, sheetId: string, token: string, lastColumn: string, startRow: number, endRow: number): Promise<unknown[][]> {
+    const range = `${module.sheetName}!A${startRow}:${lastColumn}${endRow}`;
+    const response = await this.withRetry(() =>
+      this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+        headers: { 'x-acs-dingtalk-access-token': token },
+        params: { operatorId: this.config.operatorId }
+      })
+    );
+    return response.data?.values || response.data?.valueRange?.values || response.data?.data?.values || [];
+  }
+
   private cellsToRow(module: ModuleConfig, cells: unknown[], rowNumber: number): SheetRow {
     const row: SheetRow = { id: String(rowNumber), rowNumber };
     module.fields.forEach((field, index) => {
@@ -344,6 +377,14 @@ export class DingTalkSheetClient {
       }
     });
     return row;
+  }
+
+  private hasRowContent(module: ModuleConfig, row: SheetRow) {
+    return module.fields.some((field) => {
+      if (field.type === 'formula' || field.formula) return false;
+      const value = String(row[field.key] ?? '').trim();
+      return value !== '' && value !== '-';
+    });
   }
 
   private normalizePayload(module: ModuleConfig, payload: Record<string, unknown>, id: string, rowNumber?: number): SheetRow {
@@ -393,8 +434,8 @@ export class DingTalkSheetClient {
     );
   }
 
-  private async writeRowWithPreviousFormulas(module: ModuleConfig, rowNumber: number, row: SheetRow) {
-    const previousRow = await this.findPreviousTemplateRow(module, rowNumber);
+  private async writeRowWithPreviousFormulas(module: ModuleConfig, rowNumber: number, row: SheetRow, previousRowNumber?: number) {
+    const previousRow = previousRowNumber ? { rowNumber: previousRowNumber, ...await this.readRawRow(module, previousRowNumber) } : null;
     const values = module.fields.map((field) => {
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
@@ -421,34 +462,6 @@ export class DingTalkSheetClient {
     });
 
     await this.writeRawValues(module, rowNumber, values);
-  }
-
-  private async findPreviousTemplateRow(module: ModuleConfig, rowNumber: number) {
-    for (let candidate = rowNumber - 1; candidate >= module.dataStartRow; candidate -= 1) {
-      const data = await this.readRawRow(module, candidate);
-      const values = data.values?.[0] || data.displayValues?.[0] || [];
-      const hasContent = values.some((value: unknown) => {
-        const text = String(value ?? '').trim();
-        return text !== '' && text !== '-';
-      });
-      if (hasContent) return { rowNumber: candidate, ...data };
-    }
-    return null;
-  }
-
-  private async findWritableRow(module: ModuleConfig, fallbackRowNumber: number) {
-    for (let candidate = fallbackRowNumber; candidate <= fallbackRowNumber + 30; candidate += 1) {
-      const data = await this.readRawRow(module, candidate);
-      const values = data.values?.[0] || data.displayValues?.[0] || [];
-      const formulas = data.formulas?.[0] || [];
-      const hasUserContent = values.some((value: unknown, index: number) => {
-        if (formulas[index]) return false;
-        const text = String(value ?? '').trim();
-        return text !== '' && text !== '-';
-      });
-      if (!hasUserContent) return candidate;
-    }
-    return fallbackRowNumber;
   }
 
   private rewriteFormulaRow(formula: string, fromRow: number, toRow: number) {
@@ -500,6 +513,14 @@ export class DingTalkSheetClient {
       }
     }
     throw lastError;
+  }
+
+  private tokenCacheKey() {
+    return `${this.config.baseUrl}|${this.config.appKey || ''}`;
+  }
+
+  private worksheetCacheKey() {
+    return `${this.tokenCacheKey()}|${this.config.workbookId || ''}|${this.config.operatorId || ''}`;
   }
 }
 

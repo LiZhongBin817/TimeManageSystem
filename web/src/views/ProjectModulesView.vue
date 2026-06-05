@@ -38,6 +38,7 @@ const editingRow = ref<SheetRow | null>(null);
 const form = reactive<Record<string, string | number>>({});
 const staffOptions = ref({ product: [] as string[], tester: [] as string[], developer: [] as string[] });
 const isRestrictedUser = computed(() => user.value?.role !== 'admin');
+const suppressSelectionWatch = ref(false);
 
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
@@ -121,7 +122,6 @@ async function loadRows() {
     canUpdate.value = data.canUpdate;
     canDelete.value = data.canDelete;
     rows.value = data.rows;
-    await loadStaffOptions();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '数据加载失败');
   } finally {
@@ -133,11 +133,15 @@ async function refreshAll() {
   loading.value = true;
   try {
     if (!user.value) user.value = await getMe();
+    suppressSelectionWatch.value = true;
     await loadModules();
+    suppressSelectionWatch.value = false;
     await loadRows();
+    if (canCreate.value || canUpdate.value) loadStaffOptions();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '模块加载失败');
   } finally {
+    suppressSelectionWatch.value = false;
     loading.value = false;
   }
 }
@@ -214,7 +218,9 @@ async function remove(row: SheetRow) {
   }
 }
 
-watch(selectedKey, loadRows);
+watch(selectedKey, () => {
+  if (!suppressSelectionWatch.value) loadRows();
+});
 onMounted(refreshAll);
 </script>
 

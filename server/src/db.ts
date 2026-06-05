@@ -70,6 +70,8 @@ export interface EnterpriseMemberInput {
 
 const dbPath = path.resolve(process.cwd(), 'server-data.db');
 let db: Database;
+let batchDepth = 0;
+let batchDirty = false;
 
 function persist() {
   const data = db.export();
@@ -78,7 +80,24 @@ function persist() {
 
 export function run(sql: string, params: unknown[] = []) {
   db.run(sql, params as any[]);
-  persist();
+  if (batchDepth > 0) {
+    batchDirty = true;
+  } else {
+    persist();
+  }
+}
+
+export async function withPersistenceBatch<T>(fn: () => T | Promise<T>) {
+  batchDepth += 1;
+  try {
+    return await fn();
+  } finally {
+    batchDepth -= 1;
+    if (batchDepth === 0 && batchDirty) {
+      batchDirty = false;
+      persist();
+    }
+  }
 }
 
 export async function get<T>(sql: string, params: unknown[] = []) {
@@ -487,23 +506,25 @@ export async function listModulePermissions(subjectType: PermissionSubjectType, 
 }
 
 export async function replaceModulePermissions(subjectType: PermissionSubjectType, subjectId: string, permissions: ModulePermissionInput[]) {
-  run('DELETE FROM module_permissions WHERE subject_type = ? AND subject_id = ?', [subjectType, subjectId]);
-  for (const permission of permissions) {
-    run(
-      `INSERT INTO module_permissions
-       (subject_type, subject_id, module_key, can_view, can_create, can_update, can_delete)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        subjectType,
-        subjectId,
-        permission.moduleKey,
-        permission.canView ? 1 : 0,
-        permission.canCreate ? 1 : 0,
-        permission.canUpdate ? 1 : 0,
-        permission.canDelete ? 1 : 0
-      ]
-    );
-  }
+  await withPersistenceBatch(() => {
+    run('DELETE FROM module_permissions WHERE subject_type = ? AND subject_id = ?', [subjectType, subjectId]);
+    for (const permission of permissions) {
+      run(
+        `INSERT INTO module_permissions
+         (subject_type, subject_id, module_key, can_view, can_create, can_update, can_delete)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          subjectType,
+          subjectId,
+          permission.moduleKey,
+          permission.canView ? 1 : 0,
+          permission.canCreate ? 1 : 0,
+          permission.canUpdate ? 1 : 0,
+          permission.canDelete ? 1 : 0
+        ]
+      );
+    }
+  });
   return listModulePermissions(subjectType, subjectId);
 }
 
@@ -613,40 +634,77 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
   let created = 0;
   let updated = 0;
 
-  for (const member of members) {
-    const existing = await findReusableIdentity(member);
-    if (existing) {
-      run(
-        'UPDATE user_identities SET provider_user_id = ?, union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [
-          member.providerUserId,
-          member.unionId || null,
-          member.openId || null,
-          member.name || null,
-          member.avatar || null,
-          member.mobile || null,
-          member.email || null,
-          member.raw ? JSON.stringify(member.raw) : null,
-          existing.id
-        ]
-      );
-      run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
-        member.name,
-        existing.user_id
-      ]);
-      updated += 1;
-      continue;
-    }
+  await withPersistenceBatch(async () => {
+    for (const member of members) {
+      const existing = await findReusableIdentity(member);
+      if (existing) {
+        run(
+          'UPDATE user_identities SET provider_user_id = ?, union_id = ?, open_id = ?, name = ?, avatar = ?, mobile = ?, email = ?, raw_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [
+            member.providerUserId,
+            member.unionId || null,
+            member.openId || null,
+            member.name || null,
+            member.avatar || null,
+            member.mobile || null,
+            member.email || null,
+            member.raw ? JSON.stringify(member.raw) : null,
+            existing.id
+          ]
+        );
+        run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+          member.name,
+          existing.user_id
+        ]);
+        updated += 1;
+        continue;
+      }
 
-    const baseUsername = `${member.provider}_${member.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
-    let username = baseUsername;
-    let suffix = 1;
-    const existingUserByName = await findUserByUsername(username);
-    if (existingUserByName) {
+      const baseUsername = `${member.provider}_${member.providerUserId}`.replace(/[^\w.-]/g, '_').slice(0, 80);
+      let username = baseUsername;
+      let suffix = 1;
+      const existingUserByName = await findUserByUsername(username);
+      if (existingUserByName) {
+        run(
+          'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            existingUserByName.id,
+            member.provider,
+            member.providerUserId,
+            member.unionId || null,
+            member.openId || null,
+            member.name || null,
+            member.avatar || null,
+            member.mobile || null,
+            member.email || null,
+            member.raw ? JSON.stringify(member.raw) : null
+          ]
+        );
+        run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+          member.name,
+          existingUserByName.id
+        ]);
+        updated += 1;
+        continue;
+      }
+      while (await findUserByUsername(username)) {
+        username = `${baseUsername}_${suffix}`;
+        suffix += 1;
+      }
+
+      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+        username,
+        null,
+        'viewer',
+        member.name || username,
+        1
+      ]);
+      const user = await findUserByUsername(username);
+      if (!user) continue;
       run(
         'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
-          existingUserByName.id,
+          user.id,
           member.provider,
           member.providerUserId,
           member.unionId || null,
@@ -658,44 +716,9 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
           member.raw ? JSON.stringify(member.raw) : null
         ]
       );
-      run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
-        member.name,
-        existingUserByName.id
-      ]);
-      updated += 1;
-      continue;
+      created += 1;
     }
-    while (await findUserByUsername(username)) {
-      username = `${baseUsername}_${suffix}`;
-      suffix += 1;
-    }
-
-    run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
-      username,
-      null,
-      'viewer',
-      member.name || username,
-      1
-    ]);
-    const user = await findUserByUsername(username);
-    if (!user) continue;
-    run(
-      'INSERT INTO user_identities (user_id, provider, provider_user_id, union_id, open_id, name, avatar, mobile, email, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        user.id,
-        member.provider,
-        member.providerUserId,
-        member.unionId || null,
-        member.openId || null,
-        member.name || null,
-        member.avatar || null,
-        member.mobile || null,
-        member.email || null,
-        member.raw ? JSON.stringify(member.raw) : null
-      ]
-    );
-    created += 1;
-  }
+  });
 
   return { total: members.length, created, updated };
 }

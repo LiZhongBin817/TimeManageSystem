@@ -70,8 +70,12 @@ const maxDeveloperTotal = computed(() => Math.max(1, ...developerStats.value.map
 async function load() {
   loading.value = true;
   try {
-    if (!user.value) user.value = await getMe();
-    summary.value = await getSummary();
+    const [nextUser, nextSummary] = await Promise.all([
+      user.value ? Promise.resolve(user.value) : getMe(),
+      getSummary()
+    ]);
+    user.value = nextUser;
+    summary.value = nextSummary;
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '汇总数据加载失败');
   } finally {

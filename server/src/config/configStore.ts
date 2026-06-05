@@ -1,4 +1,4 @@
-import { all, get, run } from '../db';
+import { all, get, run, withPersistenceBatch } from '../db';
 
 export type Role = 'admin' | 'editor' | 'viewer';
 export type ModuleCategory = 'project' | 'staff' | 'todo';
@@ -263,22 +263,24 @@ export async function updateModuleSheetId(moduleId: number, sheetId: string) {
 }
 
 export async function replaceModuleFields(moduleKey: string, fields: ModuleField[]) {
-  run('DELETE FROM module_fields WHERE module_key = ?', [moduleKey]);
-  fields.forEach((field, index) => {
-    run(
-      'INSERT INTO module_fields (module_key, field_key, label, type, required, hidden, formula, staff_role, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        moduleKey,
-        field.key,
-        field.label,
-        field.type,
-        field.required ? 1 : 0,
-        field.hidden ? 1 : 0,
-        field.formula || field.type === 'formula' ? 1 : 0,
-        field.staffRole || null,
-        index * 10
-      ]
-    );
+  await withPersistenceBatch(() => {
+    run('DELETE FROM module_fields WHERE module_key = ?', [moduleKey]);
+    fields.forEach((field, index) => {
+      run(
+        'INSERT INTO module_fields (module_key, field_key, label, type, required, hidden, formula, staff_role, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          moduleKey,
+          field.key,
+          field.label,
+          field.type,
+          field.required ? 1 : 0,
+          field.hidden ? 1 : 0,
+          field.formula || field.type === 'formula' ? 1 : 0,
+          field.staffRole || null,
+          index * 10
+        ]
+      );
+    });
   });
   return findModule(moduleKey);
 }

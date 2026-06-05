@@ -945,7 +945,7 @@ async function updateModuleRow(req: any, res: any, next: any) {
     }
     const payload = module.category === 'project' ? forceOwnDeveloper(req.user, req.body) : req.body;
     if (module.category === 'project') assertOwnDeveloperPayload(req.user, payload);
-    const row = await client.updateRow(module, req.params.rowId, payload);
+    const row = await client.updateRow(module, req.params.rowId, payload, current);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload });
     res.json({ row });
   } catch (error) {
@@ -971,7 +971,7 @@ async function deleteModuleRow(req: any, res: any, next: any) {
       res.status(403).json({ message: '已完成的数据不能删除' });
       return;
     }
-    await client.deleteRow(module, req.params.rowId);
+    await client.deleteRow(module, req.params.rowId, current);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'delete', rowId: req.params.rowId });
     res.status(204).send();
   } catch (error) {

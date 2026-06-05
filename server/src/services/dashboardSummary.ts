@@ -116,15 +116,21 @@ export async function buildDashboardSummary(user: AuthUser) {
     else developerRows[cleanName][moduleTitle].unfinished += 1;
   };
 
-  for (const module of projectModules) {
-    let rows: Record<string, unknown>[] = [];
-    let error: string | undefined;
+  const loadedModules = await Promise.all(projectModules.map(async (module) => {
     try {
       const client = await getClientForModule(module, user);
-      rows = filterProjectRowsForUser(user, await client.getRows(module));
+      const rows = filterProjectRowsForUser(user, await client.getRows(module));
+      return { module, rows, error: undefined as string | undefined };
     } catch (failure: any) {
-      error = failure.response?.data?.message || failure.message || '读取失败';
+      return {
+        module,
+        rows: [] as Record<string, unknown>[],
+        error: failure.response?.data?.message || failure.message || '读取失败'
+      };
     }
+  }));
+
+  for (const { module, rows, error } of loadedModules) {
     const done = rows.filter((row) => isDone(row.isCompleted)).length;
     const unfinishedRows = rows.filter((row) => !isDone(row.isCompleted));
     const testingRows = unfinishedRows.filter((row) => isTesting(row));
