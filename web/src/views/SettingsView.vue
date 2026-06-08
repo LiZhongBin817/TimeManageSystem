@@ -332,6 +332,7 @@ async function removeSource(row: DataSourceInstance) {
 
 function openModuleCreate() {
   assign(moduleForm, emptyModule());
+  moduleForm.dataSourceId = me.value?.dataSourceId;
   moduleDialogOpen.value = true;
 }
 
@@ -350,6 +351,17 @@ function removeField(index: number) {
 
 async function submitModule() {
   try {
+    const moduleKey = String(moduleForm.key || '').trim();
+    if (!moduleKey) {
+      ElMessage.error('请填写模块 key');
+      return;
+    }
+    const duplicate = modules.value.find((item) => item.key === moduleKey && item.id !== moduleForm.id);
+    if (duplicate) {
+      ElMessage.error(`模块 key 已存在：${moduleKey}`);
+      return;
+    }
+    moduleForm.key = moduleKey;
     const saved = await saveConfigModule(moduleForm);
     if (saved.id) await saveModuleFields(saved.id, moduleForm.fields);
     ElMessage.success('模块配置已保存');

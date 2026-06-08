@@ -92,13 +92,40 @@ async function fetchJson(url: string, options: { method?: string; headers?: Reco
     return { data };
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      const timeoutError = new Error('钉钉接口请求超时，请检查服务器网络') as Error & { code?: string };
-      timeoutError.code = 'ECONNABORTED';
-      throw timeoutError;
+      return fetchJsonWithAxios(url, options, '钉钉接口请求超时，请检查服务器网络');
+    }
+    if (error instanceof TypeError || error?.message === 'fetch failed' || error?.code) {
+      return fetchJsonWithAxios(url, options, error.message || 'fetch failed');
     }
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function fetchJsonWithAxios(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: unknown; timeout?: number } = {},
+  fallbackReason?: string
+) {
+  try {
+    const response = await axios.request({
+      url,
+      method: options.method || 'GET',
+      headers: {
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...(options.headers || {})
+      },
+      data: options.body,
+      timeout: options.timeout || 12000,
+      ...dingTalkAxiosOptions
+    });
+    return { data: response.data };
+  } catch (failure: any) {
+    if (fallbackReason) {
+      failure.message = `${fallbackReason}; ${failure.message || 'axios fallback failed'}`;
+    }
+    throw failure;
   }
 }
 

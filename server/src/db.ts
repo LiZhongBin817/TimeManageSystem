@@ -68,7 +68,9 @@ export interface EnterpriseMemberInput {
   raw?: unknown;
 }
 
-const dbPath = path.resolve(process.cwd(), 'server-data.db');
+const dbPath = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.resolve(__dirname, '..', 'server-data.db');
 let db: Database;
 let batchDepth = 0;
 let batchDirty = false;

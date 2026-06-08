@@ -753,7 +753,7 @@ router.post('/config/modules', async (req, res, next) => {
       res.status(400).json({ message: '模块配置不完整' });
       return;
     }
-    const module = await saveModule(normalizeModuleInput(parsed.data));
+    const module = await saveModule(normalizeModuleInputForRequest(parsed.data, req.user!));
     if (module && Array.isArray(req.body.fields)) await replaceModuleFields(module.key, req.body.fields as ModuleField[]);
     res.status(201).json({ module: module ? await findModule(module.key) : module });
   } catch (error) {
@@ -772,7 +772,7 @@ router.put('/config/modules/:id', async (req, res, next) => {
       res.status(400).json({ message: '模块配置不完整' });
       return;
     }
-    const module = await saveModule(normalizeModuleInput(parsed.data));
+    const module = await saveModule(normalizeModuleInputForRequest(parsed.data, req.user!));
     if (module && Array.isArray(req.body.fields)) await replaceModuleFields(module.key, req.body.fields as ModuleField[]);
     res.json({ module: module ? await findModule(module.key) : module });
   } catch (error) {
@@ -830,7 +830,7 @@ router.post('/config/modules/:id/sync', async (req, res, next) => {
 
 router.get('/config/modules/:id/fields', async (req, res, next) => {
   try {
-    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const modules = await listModules({ enabledOnly: false });
     const module = modules.find((item) => item.id === Number(req.params.id));
     if (!module) {
       res.status(404).json({ message: '模块不存在' });
@@ -848,7 +848,7 @@ router.put('/config/modules/:id/fields', async (req, res, next) => {
       res.status(403).json({ message: '没有配置权限' });
       return;
     }
-    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const modules = await listModules({ enabledOnly: false });
     const module = modules.find((item) => item.id === Number(req.params.id));
     if (!module) {
       res.status(404).json({ message: '模块不存在' });
@@ -984,6 +984,14 @@ function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {
     ...input,
     dataSourceId: input.dataSourceId ?? undefined,
     sheetId: input.sheetId || undefined
+  };
+}
+
+function normalizeModuleInputForRequest(input: z.infer<typeof moduleSchema>, user: NonNullable<Express.Request['user']>) {
+  const normalized = normalizeModuleInput(input);
+  return {
+    ...normalized,
+    dataSourceId: normalized.dataSourceId ?? user.dataSourceId
   };
 }
 

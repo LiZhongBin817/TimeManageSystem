@@ -217,6 +217,16 @@ export async function findModule(key: string) {
 }
 
 export async function saveModule(input: Partial<ModuleConfig> & { key: string; title: string; sheetName: string }) {
+  const duplicate = await get<ModuleRow>(
+    input.id
+      ? 'SELECT * FROM module_configs WHERE module_key = ? AND id <> ?'
+      : 'SELECT * FROM module_configs WHERE module_key = ?',
+    input.id ? [input.key, input.id] : [input.key]
+  );
+  if (duplicate) {
+    throw new Error(`模块 key 已存在：${input.key}`);
+  }
+
   if (input.id) {
     run(
       'UPDATE module_configs SET module_key = ?, title = ?, category = ?, data_source_id = ?, sheet_name = ?, sheet_id = ?, header_row = ?, data_start_row = ?, editable = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
