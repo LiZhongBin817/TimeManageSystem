@@ -1,8 +1,7 @@
 import axios from 'axios';
 import http from 'http';
 import https from 'https';
-import { ModuleConfig } from '../config/modules';
-import { findModule } from '../config/modules';
+import { ModuleConfig, findModule, getDataSource } from '../config/modules';
 import { SheetRow, mockRows } from '../data/mockRows';
 
 interface DingTalkConfig {
@@ -16,6 +15,11 @@ interface DingTalkConfig {
 interface WorksheetMeta {
   sheetId: string;
   name: string;
+}
+
+interface FormulaSource {
+  rowNumber: number;
+  formulas: string[];
 }
 
 const accessTokenCache = new Map<string, { value: string; expiresAt: number }>();
@@ -235,6 +239,9 @@ export class DingTalkSheetClient {
 
     const syncedModule = { ...module, sheetId: sheet.sheetId };
     await this.writeHeaderRow(syncedModule);
+    if (module.referenceModuleKey && !(await this.getRows(syncedModule)).length) {
+      await this.writeReferenceFormulaTemplate(syncedModule);
+    }
     return { ...sheet, created, headerSynced: true };
   }
 
@@ -510,18 +517,16 @@ export class DingTalkSheetClient {
   }
 
   private async writeRowWithPreviousFormulas(module: ModuleConfig, rowNumber: number, row: SheetRow, previousRowNumber?: number) {
-    const previousRow = previousRowNumber ? { rowNumber: previousRowNumber, ...await this.readRawRow(module, previousRowNumber) } : null;
+    const formulaSource = previousRowNumber
+      ? await this.getFormulaSourceFromRow(module, previousRowNumber)
+      : await this.getReferenceFormulaSource(module);
     const values = module.fields.map((field) => {
       const value = String(row[field.key] ?? '').trim();
       if (value) return value;
       return field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-';
     });
 
-    if (previousRow?.formulas?.[0]) {
-      previousRow.formulas[0].forEach((formula: string, index: number) => {
-        if (formula) values[index] = this.rewriteFormulaRow(formula, previousRow.rowNumber, rowNumber);
-      });
-    }
+    this.applyFormulaSource(values, formulaSource, rowNumber);
 
     await this.writeRawValues(module, rowNumber, values);
   }
@@ -541,6 +546,53 @@ export class DingTalkSheetClient {
 
   private rewriteFormulaRow(formula: string, fromRow: number, toRow: number) {
     return formula.replace(new RegExp(`(?<![A-Z])([A-Z]+)${fromRow}(?!\\d)`, 'g'), `$1${toRow}`);
+  }
+
+  private async writeReferenceFormulaTemplate(module: ModuleConfig) {
+    const formulaSource = await this.getReferenceFormulaSource(module);
+    if (!formulaSource) return;
+    const values = module.fields.map(() => '');
+    this.applyFormulaSource(values, formulaSource, module.dataStartRow);
+    if (values.some(Boolean)) {
+      await this.writeRawValues(module, module.dataStartRow, values);
+    }
+  }
+
+  private async getFormulaSourceFromRow(module: ModuleConfig, rowNumber: number): Promise<FormulaSource | null> {
+    const rawRow = await this.readRawRow(module, rowNumber);
+    const formulas = rawRow.formulas?.[0] || [];
+    return formulas.some(Boolean) ? { rowNumber, formulas } : null;
+  }
+
+  private async getReferenceFormulaSource(module: ModuleConfig): Promise<FormulaSource | null> {
+    if (!module.referenceModuleKey || module.referenceModuleKey === module.key) return null;
+    const referenceModule = await findModule(module.referenceModuleKey);
+    if (!referenceModule) return null;
+    const sourceClient = await this.getReferenceFormulaClient(module, referenceModule);
+    if (!sourceClient.isConfigured) return null;
+
+    const maxScanRows = 50;
+    for (let offset = 0; offset < maxScanRows; offset += 1) {
+      const rowNumber = referenceModule.dataStartRow + offset;
+      const source = await sourceClient.getFormulaSourceFromRow(referenceModule, rowNumber);
+      if (source) return source;
+    }
+    return null;
+  }
+
+  private async getReferenceFormulaClient(module: ModuleConfig, referenceModule: ModuleConfig) {
+    if (!referenceModule.dataSourceId || referenceModule.dataSourceId === module.dataSourceId) return this;
+    const referenceDataSource = await getDataSource(referenceModule.dataSourceId);
+    if (!referenceDataSource) throw new Error('参考模块的数据源不存在，无法复制公式');
+    if (referenceDataSource.platform !== 'dingtalk') throw new Error('当前仅支持从钉钉参考模块复制公式');
+    return new DingTalkSheetClient(referenceDataSource.config);
+  }
+
+  private applyFormulaSource(values: string[], formulaSource: FormulaSource | null, targetRowNumber: number) {
+    if (!formulaSource) return;
+    formulaSource.formulas.forEach((formula, index) => {
+      if (formula) values[index] = this.rewriteFormulaRow(formula, formulaSource.rowNumber, targetRowNumber);
+    });
   }
 
   private async readRawRow(module: ModuleConfig, rowNumber: number) {

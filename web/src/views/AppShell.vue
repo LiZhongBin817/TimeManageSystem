@@ -12,7 +12,7 @@ const user = ref<User>();
 const readableModules = ref<ModuleConfig[]>([]);
 
 const canConfigure = computed(() => user.value?.role === 'admin' || user.value?.role === 'editor');
-const hasProjectModules = computed(() => readableModules.value.some((item) => item.category === 'project'));
+const hasProjectModules = computed(() => canConfigure.value || readableModules.value.some((item) => item.category === 'project'));
 const hasStaff = computed(() => readableModules.value.some((item) => item.key === 'staff'));
 const hasTodos = computed(() => readableModules.value.some((item) => item.key === 'todos'));
 const active = computed(() => route.path);

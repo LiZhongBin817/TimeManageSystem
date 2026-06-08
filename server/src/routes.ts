@@ -94,7 +94,8 @@ const moduleSchema = z.object({
   dataStartRow: z.number().default(2),
   editable: z.boolean().default(true),
   enabled: z.boolean().default(true),
-  sortOrder: z.number().default(0)
+  sortOrder: z.number().default(0),
+  referenceModuleKey: z.string().optional().nullable()
 });
 
 const fieldsSchema = z.object({
@@ -742,6 +743,15 @@ router.get('/config/modules', async (req, res, next) => {
   }
 });
 
+router.get('/config/reference-modules', async (req, res, next) => {
+  try {
+    const modules = await listModules({ category: 'project', enabledOnly: false });
+    res.json({ modules });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/config/modules', async (req, res, next) => {
   try {
     if (!canConfigure(req.user!.role)) {
@@ -983,7 +993,8 @@ function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {
   return {
     ...input,
     dataSourceId: input.dataSourceId ?? undefined,
-    sheetId: input.sheetId || undefined
+    sheetId: input.sheetId || undefined,
+    referenceModuleKey: input.referenceModuleKey || undefined
   };
 }
 

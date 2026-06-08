@@ -64,6 +64,7 @@ export interface ModuleConfig {
   editable: boolean;
   enabled: boolean;
   sortOrder: number;
+  referenceModuleKey?: string;
   fields: ModuleField[];
   canView?: boolean;
   canEdit?: boolean;

@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { Role, getDataSource } from './config/modules';
-import { IdentityProvider, UserRecord, findUserByUsername, getUserDataSourcePreference, upsertOAuthUser } from './db';
+import { IdentityProvider, UserRecord, findUserById, findUserByUsername, getUserDataSourcePreference, upsertOAuthUser } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
 
@@ -92,7 +92,11 @@ export function verifyOAuthState(state: string) {
   return jwt.verify(state, jwtSecret) as { provider: IdentityProvider; dataSourceId: number; redirectUri: string };
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+function dataSourceChanged(res: Response, message = '账号数据源已变更，请重新登录') {
+  res.status(409).json({ code: 'DATA_SOURCE_CHANGED', message });
+}
+
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
 
@@ -102,9 +106,47 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    req.user = jwt.verify(token, jwtSecret) as AuthUser;
+    const tokenUser = jwt.verify(token, jwtSecret) as AuthUser;
+    const user = await findUserById(tokenUser.id);
+    if (!user) {
+      res.status(401).json({ message: '账号不存在，请重新登录' });
+      return;
+    }
+    if (user.enabled === 0) {
+      res.status(401).json({ message: '账号已停用，请联系管理员' });
+      return;
+    }
+
+    const tokenDataSource = await getDataSource(tokenUser.dataSourceId);
+    if (!tokenDataSource?.enabled) {
+      dataSourceChanged(res, '当前数据源不可用，请重新登录选择新的数据源');
+      return;
+    }
+    if (tokenDataSource.platform !== tokenUser.platform) {
+      dataSourceChanged(res);
+      return;
+    }
+
+    const preference = await getUserDataSourcePreference(user.id);
+    if (preference?.data_source_id && preference.data_source_id !== tokenUser.dataSourceId) {
+      dataSourceChanged(res);
+      return;
+    }
+
+    req.user = {
+      ...tokenUser,
+      username: user.username,
+      role: user.role,
+      displayName: user.display_name,
+      platform: tokenDataSource.platform,
+      dataSourceName: tokenDataSource.name
+    };
     next();
-  } catch {
+  } catch (error) {
+    if (!(error instanceof jwt.JsonWebTokenError) && !(error instanceof jwt.TokenExpiredError)) {
+      next(error);
+      return;
+    }
     res.status(401).json({ message: '登录已过期，请重新登录' });
   }
 }

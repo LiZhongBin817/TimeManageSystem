@@ -35,6 +35,7 @@ export interface ModuleConfig {
   editable: boolean;
   enabled: boolean;
   sortOrder: number;
+  referenceModuleKey?: string;
   fields: ModuleField[];
 }
 
@@ -51,6 +52,7 @@ interface ModuleRow {
   editable: number;
   enabled: number;
   sort_order: number;
+  reference_module_key?: string;
 }
 
 interface FieldRow {
@@ -229,7 +231,7 @@ export async function saveModule(input: Partial<ModuleConfig> & { key: string; t
 
   if (input.id) {
     run(
-      'UPDATE module_configs SET module_key = ?, title = ?, category = ?, data_source_id = ?, sheet_name = ?, sheet_id = ?, header_row = ?, data_start_row = ?, editable = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      'UPDATE module_configs SET module_key = ?, title = ?, category = ?, data_source_id = ?, sheet_name = ?, sheet_id = ?, header_row = ?, data_start_row = ?, editable = ?, enabled = ?, sort_order = ?, reference_module_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [
         input.key,
         input.title,
@@ -242,12 +244,13 @@ export async function saveModule(input: Partial<ModuleConfig> & { key: string; t
         input.editable === false ? 0 : 1,
         input.enabled === false ? 0 : 1,
         input.sortOrder ?? 0,
+        input.referenceModuleKey || null,
         input.id
       ]
     );
   } else {
     run(
-      'INSERT INTO module_configs (module_key, title, category, data_source_id, sheet_name, sheet_id, header_row, data_start_row, editable, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO module_configs (module_key, title, category, data_source_id, sheet_name, sheet_id, header_row, data_start_row, editable, enabled, sort_order, reference_module_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         input.key,
         input.title,
@@ -259,7 +262,8 @@ export async function saveModule(input: Partial<ModuleConfig> & { key: string; t
         input.dataStartRow ?? 2,
         input.editable === false ? 0 : 1,
         input.enabled === false ? 0 : 1,
-        input.sortOrder ?? 0
+        input.sortOrder ?? 0,
+        input.referenceModuleKey || null
       ]
     );
   }
@@ -310,6 +314,7 @@ async function hydrateModule(row: ModuleRow): Promise<ModuleConfig> {
     editable: Boolean(row.editable),
     enabled: Boolean(row.enabled),
     sortOrder: row.sort_order,
+    referenceModuleKey: row.reference_module_key || undefined,
     fields: fields.map(normalizeField)
   };
 }

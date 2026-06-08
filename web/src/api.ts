@@ -30,6 +30,13 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response?.status === 409 && error.response?.data?.code === 'DATA_SOURCE_CHANGED') {
+      localStorage.removeItem(TOKEN_KEY);
+      const message = error.response.data.message || '数据源已变更，请重新登录';
+      if (location.pathname !== '/login') {
+        location.href = `/login?oauthError=${encodeURIComponent(message)}`;
+      }
+    }
     if (error.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY);
       if (location.pathname !== '/login') location.href = '/login';
@@ -105,6 +112,11 @@ export async function getProjectModules() {
 
 export async function getConfigModules() {
   const { data } = await api.get<{ modules: ModuleConfig[] }>('/config/modules');
+  return data.modules;
+}
+
+export async function getReferenceModules() {
+  const { data } = await api.get<{ modules: ModuleConfig[] }>('/config/reference-modules');
   return data.modules;
 }
 

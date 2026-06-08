@@ -197,10 +197,13 @@ export async function initDatabase() {
       editable INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      reference_module_key TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await ensureColumn('module_configs', 'reference_module_key', 'TEXT');
 
   run(`
     CREATE TABLE IF NOT EXISTS module_fields (

@@ -12,6 +12,7 @@ import {
   getNotificationSettings,
   getNotificationUserSettings,
   getPermissions,
+  getReferenceModules,
   getUsers,
   pushDashboardNotification,
   saveConfigModule,
@@ -43,6 +44,7 @@ import type {
 const loading = ref(false);
 const sources = ref<DataSourceInstance[]>([]);
 const modules = ref<ModuleConfig[]>([]);
+const referenceModules = ref<ModuleConfig[]>([]);
 const users = ref<ManagedUser[]>([]);
 const permissions = ref<ModulePermission[]>([]);
 const notificationLogs = ref<NotificationLog[]>([]);
@@ -83,6 +85,16 @@ const notificationUserForm = reactive<NotificationUserSettings>({
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
 const sourceOptions = computed(() => sources.value.map((item) => ({ label: item.name, value: item.id })));
+const sourceNameById = computed(() => new Map(sources.value.map((item) => [item.id, item.name])));
+const referenceModuleOptions = computed(() => {
+  const currentKey = moduleForm.id ? moduleForm.key : '';
+  return referenceModules.value
+    .filter((item) => item.category === 'project' && item.key !== currentKey)
+    .map((item) => ({
+      label: item.dataSourceId ? `${item.title}（${sourceNameById.value.get(item.dataSourceId) || '其他数据源'}）` : `${item.title}（公共模板）`,
+      value: item.key
+    }));
+});
 const isAdmin = computed(() => me.value?.role === 'admin');
 const canUseNotification = computed(() => Boolean(me.value));
 const roleOptions: Array<{ label: string; value: Role }> = [
@@ -147,6 +159,7 @@ function emptyModule(): ModuleConfig {
     editable: true,
     enabled: true,
     sortOrder: 0,
+    referenceModuleKey: '',
     fields: defaultProjectFields()
   };
 }
@@ -160,12 +173,14 @@ async function load() {
   loading.value = true;
   try {
     me.value = await getMe();
-    const [sourceList, moduleList] = await Promise.all([
+    const [sourceList, moduleList, referenceModuleList] = await Promise.all([
       getDataSourceInstances(undefined, true),
-      getConfigModules()
+      getConfigModules(),
+      getReferenceModules()
     ]);
     sources.value = sourceList;
     modules.value = moduleList;
+    referenceModules.value = referenceModuleList;
     if (canUseNotification.value) await loadNotificationConfig();
     if (me.value.role === 'admin') {
       users.value = await getUsers();
@@ -349,6 +364,16 @@ function removeField(index: number) {
   moduleForm.fields.splice(index, 1);
 }
 
+function applyReferenceModule(referenceModuleKey?: string) {
+  const source = referenceModules.value.find((item) => item.key === referenceModuleKey);
+  if (!source) return;
+  moduleForm.category = source.category;
+  moduleForm.headerRow = source.headerRow;
+  moduleForm.dataStartRow = source.dataStartRow;
+  moduleForm.editable = source.editable;
+  moduleForm.fields = JSON.parse(JSON.stringify(source.fields));
+}
+
 async function submitModule() {
   try {
     const moduleKey = String(moduleForm.key || '').trim();
@@ -362,6 +387,7 @@ async function submitModule() {
       return;
     }
     moduleForm.key = moduleKey;
+    moduleForm.referenceModuleKey = moduleForm.referenceModuleKey || undefined;
     const saved = await saveConfigModule(moduleForm);
     if (saved.id) await saveModuleFields(saved.id, moduleForm.fields);
     ElMessage.success('模块配置已保存');
@@ -764,6 +790,19 @@ onMounted(load);
         <div class="form-grid">
           <el-form-item label="模块名称" required><el-input v-model="moduleForm.title" /></el-form-item>
           <el-form-item label="模块 key" required><el-input v-model="moduleForm.key" /></el-form-item>
+          <el-form-item v-if="!moduleForm.id" label="参考模块">
+            <el-select
+              v-model="moduleForm.referenceModuleKey"
+              class="full-field"
+              clearable
+              filterable
+              placeholder="选择已有项目模块作为字段和公式参考"
+              @change="applyReferenceModule"
+            >
+              <el-option v-for="item in referenceModuleOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <div class="field-help">仅在创建时复制字段配置和公式来源；保存后新模块可独立维护。</div>
+          </el-form-item>
           <el-form-item label="分类">
             <el-select v-model="moduleForm.category" class="full-field">
               <el-option label="项目模块" value="project" />
