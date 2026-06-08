@@ -2,6 +2,60 @@ import axios from 'axios';
 import { DataSourceInstance } from '../config/configStore';
 import { IdentityProvider } from '../db';
 
+const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 8000);
+
+interface FetchJsonOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+}
+
+async function fetchJson(url: string, options: FetchJsonOptions = {}) {
+  const fetchImpl = (globalThis as any).fetch;
+  const AbortControllerImpl = (globalThis as any).AbortController;
+  if (!fetchImpl || !AbortControllerImpl) {
+    throw new Error('当前 Node.js 版本不支持 fetch，请升级到 Node 18 或以上');
+  }
+
+  const controller = new AbortControllerImpl();
+  const timer = setTimeout(() => controller.abort(), OAUTH_REQUEST_TIMEOUT);
+  try {
+    const response = await fetchImpl(url, {
+      method: options.method || 'GET',
+      headers: {
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...(options.headers || {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let data: any = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
+    if (!response.ok) {
+      const error = new Error(data?.message || data?.msg || response.statusText || '请求失败') as Error & { response?: { status: number; data: unknown } };
+      error.response = { status: response.status, data };
+      throw error;
+    }
+    return { data };
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络') as Error & { code?: string };
+      timeoutError.code = 'ECONNABORTED';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface OAuthIdentity {
   providerUserId: string;
   unionId?: string;
@@ -19,17 +73,20 @@ function requireConfig(value: string | undefined, label: string) {
 }
 
 function oauthError(label: string, error: unknown) {
-  if (axios.isAxiosError(error)) {
-    const status = error.response?.status;
-    const data = error.response?.data;
+  if (axios.isAxiosError(error) || (error as any)?.response) {
+    const status = (error as any).response?.status;
+    const data = (error as any).response?.data;
     const message =
       data?.message ||
       data?.msg ||
       data?.error_description ||
       data?.error ||
-      error.message;
+      (error as any).message;
     const detail = typeof data === 'string' ? data : JSON.stringify(data || {});
-    return new Error(`${label}失败${status ? `（${status}）` : ''}：${message}${detail && detail !== '{}' ? `；${detail}` : ''}`);
+    const timeoutMessage = (error as any).code === 'ETIMEDOUT' || (error as any).code === 'ECONNABORTED'
+      ? '请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络'
+      : message;
+    return new Error(`${label}失败${status ? `（${status}）` : ''}：${timeoutMessage}${detail && detail !== '{}' ? `；${detail}` : ''}`);
   }
   return error instanceof Error ? error : new Error(`${label}失败`);
 }
@@ -90,26 +147,25 @@ async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: strin
   const appSecret = requireConfig(dataSource.config.appSecret, '钉钉 AppSecret');
   const baseUrl = dataSource.config.baseUrl || 'https://api.dingtalk.com';
 
-  const tokenResponse = await axios
-    .post(`${baseUrl}/v1.0/oauth2/userAccessToken`, {
+  const tokenResponse = await fetchJson(`${baseUrl}/v1.0/oauth2/userAccessToken`, {
+    method: 'POST',
+    body: {
       clientId: appKey,
       clientSecret: appSecret,
       code,
       grantType: 'authorization_code'
-    })
-    .catch((error) => {
-      throw oauthError('钉钉授权码换取用户 token', error);
-    });
+    }
+  }).catch((error) => {
+    throw oauthError('钉钉授权码换取用户 token', error);
+  });
   const userAccessToken = tokenResponse.data?.accessToken;
   if (!userAccessToken) throw new Error('钉钉用户 accessToken 获取失败');
 
-  const userResponse = await axios
-    .get(`${baseUrl}/v1.0/contact/users/me`, {
-      headers: { 'x-acs-dingtalk-access-token': userAccessToken }
-    })
-    .catch((error) => {
-      throw oauthError('钉钉获取当前用户信息', error);
-    });
+  const userResponse = await fetchJson(`${baseUrl}/v1.0/contact/users/me`, {
+    headers: { 'x-acs-dingtalk-access-token': userAccessToken }
+  }).catch((error) => {
+    throw oauthError('钉钉获取当前用户信息', error);
+  });
   const user = userResponse.data || {};
   const providerUserId = user.unionId || user.openId || user.userId;
   if (!providerUserId) throw new Error('钉钉未返回可识别的用户 ID');
@@ -131,39 +187,36 @@ async function fetchFeishuIdentity(dataSource: DataSourceInstance, code: string)
   const appSecret = requireConfig(dataSource.config.appSecret, '飞书 AppSecret');
   const baseUrl = dataSource.config.baseUrl || 'https://open.feishu.cn';
 
-  const appTokenResponse = await axios
-    .post(`${baseUrl}/open-apis/auth/v3/app_access_token/internal`, {
+  const appTokenResponse = await fetchJson(`${baseUrl}/open-apis/auth/v3/app_access_token/internal`, {
+    method: 'POST',
+    body: {
       app_id: appId,
       app_secret: appSecret
-    })
-    .catch((error) => {
-      throw oauthError('飞书获取 app_access_token', error);
-    });
+    }
+  }).catch((error) => {
+    throw oauthError('飞书获取 app_access_token', error);
+  });
   const appAccessToken = appTokenResponse.data?.app_access_token;
   if (!appAccessToken) throw new Error(appTokenResponse.data?.msg || '飞书 app_access_token 获取失败');
 
-  const tokenResponse = await axios
-    .post(
-      `${baseUrl}/open-apis/authen/v1/oidc/access_token`,
-      {
-        grant_type: 'authorization_code',
-        code
-      },
-      { headers: { Authorization: `Bearer ${appAccessToken}` } }
-    )
-    .catch((error) => {
-      throw oauthError('飞书授权码换取用户 token', error);
-    });
+  const tokenResponse = await fetchJson(`${baseUrl}/open-apis/authen/v1/oidc/access_token`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${appAccessToken}` },
+    body: {
+      grant_type: 'authorization_code',
+      code
+    }
+  }).catch((error) => {
+    throw oauthError('飞书授权码换取用户 token', error);
+  });
   const userAccessToken = tokenResponse.data?.data?.access_token || tokenResponse.data?.access_token;
   if (!userAccessToken) throw new Error(tokenResponse.data?.msg || '飞书用户 access_token 获取失败');
 
-  const userResponse = await axios
-    .get(`${baseUrl}/open-apis/authen/v1/user_info`, {
-      headers: { Authorization: `Bearer ${userAccessToken}` }
-    })
-    .catch((error) => {
-      throw oauthError('飞书获取当前用户信息', error);
-    });
+  const userResponse = await fetchJson(`${baseUrl}/open-apis/authen/v1/user_info`, {
+    headers: { Authorization: `Bearer ${userAccessToken}` }
+  }).catch((error) => {
+    throw oauthError('飞书获取当前用户信息', error);
+  });
   const user = userResponse.data?.data || userResponse.data || {};
   const providerUserId = user.union_id || user.open_id || user.user_id;
   if (!providerUserId) throw new Error('飞书未返回可识别的用户 ID');

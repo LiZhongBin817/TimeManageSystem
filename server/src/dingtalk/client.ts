@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
+import http from 'http';
+import https from 'https';
 import { ModuleConfig } from '../config/modules';
 import { findModule } from '../config/modules';
 import { SheetRow, mockRows } from '../data/mockRows';
@@ -23,6 +25,9 @@ const WORKSHEET_CACHE_TTL = 5 * 60 * 1000;
 const ROW_READ_CHUNK_SIZE = Number(process.env.DINGTALK_ROW_READ_CHUNK_SIZE || 150);
 const ROW_READ_MAX_ROW = Number(process.env.DINGTALK_ROW_READ_MAX_ROW || 2000);
 const ROW_READ_TAIL_WINDOW = Number(process.env.DINGTALK_ROW_READ_TAIL_WINDOW || 20);
+const dingTalkHttpAgent = new http.Agent({ family: 4 });
+const dingTalkHttpsAgent = new https.Agent({ family: 4 });
+const dingTalkAxiosOptions = { httpAgent: dingTalkHttpAgent, httpsAgent: dingTalkHttpsAgent };
 
 interface EnterpriseMember {
   providerUserId: string;
@@ -65,7 +70,7 @@ export class DingTalkSheetClient {
       operatorId: config?.operatorId ?? process.env.DINGTALK_OPERATOR_ID,
       baseUrl: config?.baseUrl ?? process.env.DINGTALK_API_BASE_URL ?? 'https://api.dingtalk.com'
     };
-    this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000 });
+    this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000, ...dingTalkAxiosOptions });
   }
 
   get isConfigured() {
@@ -87,7 +92,7 @@ export class DingTalkSheetClient {
         const response = await axios.post(
           'https://oapi.dingtalk.com/topapi/v2/user/list',
           { dept_id: Number(deptId), cursor, size: 100, contain_access_limit: false, language: 'zh_CN' },
-          { params: { access_token: token }, timeout: 12000 }
+          { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
         );
         const result = response.data?.result || {};
         const list = result.list || [];
@@ -284,7 +289,8 @@ export class DingTalkSheetClient {
 
     const response = await axios.get('https://oapi.dingtalk.com/gettoken', {
       params: { appkey: this.config.appKey, appsecret: this.config.appSecret },
-      timeout: 12000
+      timeout: 12000,
+      ...dingTalkAxiosOptions
     });
     const token = response.data?.access_token;
     if (!token || response.data?.errcode) {
@@ -298,7 +304,7 @@ export class DingTalkSheetClient {
     const response = await axios.post(
       'https://oapi.dingtalk.com/topapi/v2/department/listsub',
       { dept_id: rootDeptId },
-      { params: { access_token: token }, timeout: 12000 }
+      { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
     );
     const list = response.data?.result || [];
     const children: any[] = [];

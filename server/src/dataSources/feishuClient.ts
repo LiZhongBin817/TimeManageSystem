@@ -1,4 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
+import http from 'http';
+import https from 'https';
 import { ModuleConfig } from '../config/configStore';
 import { SheetRow } from '../data/mockRows';
 
@@ -20,6 +22,10 @@ interface EnterpriseMember {
   department?: string;
   raw?: unknown;
 }
+
+const feishuHttpAgent = new http.Agent({ family: 4 });
+const feishuHttpsAgent = new https.Agent({ family: 4 });
+const feishuAxiosOptions = { httpAgent: feishuHttpAgent, httpsAgent: feishuHttpsAgent };
 
 function columnName(index: number) {
   let name = '';
@@ -47,7 +53,7 @@ export class FeishuSheetClient {
       baseUrl: 'https://open.feishu.cn',
       ...config
     };
-    this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000 });
+    this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000, ...feishuAxiosOptions });
   }
 
   get isConfigured() {
