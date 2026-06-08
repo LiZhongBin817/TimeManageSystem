@@ -22,6 +22,10 @@ function timeInShanghai() {
   return `${hour}:${minute}`;
 }
 
+function hasReachedTime(currentTime: string, scheduledTime = '09:00') {
+  return currentTime >= scheduledTime;
+}
+
 async function buildSchedulerUser(): Promise<AuthUser | undefined> {
   const user = await get<any>("SELECT * FROM users WHERE role = 'admin' AND enabled = 1 ORDER BY id LIMIT 1");
   if (!user) return undefined;
@@ -83,17 +87,31 @@ async function tick() {
     const currentTime = timeInShanghai();
     if (!settings.webhookUrl) return;
 
-    if (settings.enabled && settings.lastScheduledDate !== today && currentTime === (settings.scheduledTime || '09:00')) {
+    if (settings.enabled && settings.lastScheduledDate !== today && hasReachedTime(currentTime, settings.scheduledTime || '09:00')) {
       const user = await buildSchedulerUser();
       if (user) {
+        console.log(`[notification-scheduler] pushing global dashboard summary at ${currentTime}`);
         await pushDashboardNotification(user, 'scheduled');
         await markScheduledSent(today);
       }
     }
 
-    const users = await buildUserSchedulerUsers(currentTime, today);
+    const personalRows = await all<any>(
+      `SELECT scheduled_time
+       FROM notification_user_settings
+       WHERE enabled = 1
+         AND COALESCE(last_scheduled_date, '') <> ?
+       GROUP BY scheduled_time`,
+      [today]
+    );
+    const duePersonalTimes = personalRows
+      .map((row) => String(row.scheduled_time || '09:00'))
+      .filter((scheduledTime) => hasReachedTime(currentTime, scheduledTime));
+
+    const users = (await Promise.all(duePersonalTimes.map((scheduledTime) => buildUserSchedulerUsers(scheduledTime, today)))).flat();
     for (const user of users) {
       try {
+        console.log(`[notification-scheduler] pushing personal dashboard summary for user ${user.id} at ${currentTime}`);
         await pushDashboardNotification(user, `scheduled:user:${user.id}`);
         await markUserScheduledSent(user.id, today);
       } catch (error) {
@@ -109,6 +127,7 @@ async function tick() {
 
 export function startNotificationScheduler() {
   if (timer) return;
+  console.log('[notification-scheduler] started');
   timer = setInterval(tick, 60 * 1000);
   tick();
 }

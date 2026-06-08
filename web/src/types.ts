@@ -108,8 +108,12 @@ export interface NotificationLog {
   id: number;
   channel: string;
   action: string;
+  actionText?: string;
   status: string;
+  user_id?: number;
+  user_display_name?: string;
   message?: string;
   payload?: string;
   created_at: string;
+  createdAtText?: string;
 }

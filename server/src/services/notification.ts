@@ -80,6 +80,12 @@ export async function saveNotificationUserSettings(userId: number, input: Notifi
      ON CONFLICT(user_id) DO UPDATE SET
        enabled = excluded.enabled,
        scheduled_time = excluded.scheduled_time,
+       last_scheduled_date = CASE
+         WHEN notification_user_settings.enabled <> excluded.enabled
+           OR notification_user_settings.scheduled_time <> excluded.scheduled_time
+         THEN NULL
+         ELSE notification_user_settings.last_scheduled_date
+       END,
        updated_at = CURRENT_TIMESTAMP`,
     [userId, input.enabled ? 1 : 0, input.scheduledTime || '09:00']
   );
@@ -96,6 +102,12 @@ export async function saveNotificationSettings(input: NotificationSettings) {
        secret = excluded.secret,
        keyword_json = excluded.keyword_json,
        scheduled_time = excluded.scheduled_time,
+       last_scheduled_date = CASE
+         WHEN notification_settings.enabled <> excluded.enabled
+           OR notification_settings.scheduled_time <> excluded.scheduled_time
+         THEN NULL
+         ELSE notification_settings.last_scheduled_date
+       END,
        updated_at = CURRENT_TIMESTAMP`,
     [
       input.enabled ? 1 : 0,
@@ -108,8 +120,46 @@ export async function saveNotificationSettings(input: NotificationSettings) {
   return getNotificationSettings();
 }
 
-export async function listNotificationLogs() {
-  return all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 100');
+function formatShanghaiTime(value?: string) {
+  if (!value) return '';
+  const isoValue = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return value;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value || '';
+  return `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}:${pick('second')}`;
+}
+
+function formatNotificationAction(action: string) {
+  if (action === 'manual') return '手动推送';
+  if (action === 'scheduled') return '自动推送';
+  if (action.startsWith('scheduled:user:')) return '个人自动推送';
+  if (action === 'test') return '测试消息';
+  return action;
+}
+
+function normalizeNotificationLogs(logs: any[]) {
+  return logs.map((log) => ({
+    ...log,
+    actionText: formatNotificationAction(String(log.action || '')),
+    createdAtText: formatShanghaiTime(log.created_at)
+  }));
+}
+
+export async function listNotificationLogs(user?: AuthUser) {
+  const logs = user?.role === 'admin'
+    ? await all('SELECT * FROM notification_logs ORDER BY id DESC LIMIT 100')
+    : await all('SELECT * FROM notification_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100', [user?.id ?? 0]);
+  return normalizeNotificationLogs(logs);
 }
 
 function signWebhook(webhookUrl: string, secret: string) {
@@ -189,24 +239,26 @@ async function sendDingTalkMarkdown(settings: NotificationSettings, title: strin
   return data;
 }
 
-function logNotification(action: string, status: 'success' | 'failed', message: string, payload?: unknown) {
-  run('INSERT INTO notification_logs (channel, action, status, message, payload) VALUES (?, ?, ?, ?, ?)', [
+function logNotification(action: string, status: 'success' | 'failed', message: string, payload?: unknown, user?: AuthUser) {
+  run('INSERT INTO notification_logs (channel, action, status, user_id, user_display_name, message, payload) VALUES (?, ?, ?, ?, ?, ?, ?)', [
     'dingtalk_robot',
     action,
     status,
+    user?.id ?? null,
+    user?.displayName || user?.username || null,
     message,
     payload ? JSON.stringify(payload) : null
   ]);
 }
 
-export async function sendTestNotification() {
+export async function sendTestNotification(user?: AuthUser) {
   const settings = await getNotificationSettings();
   try {
     const result = await sendDingTalkMarkdown(settings, '任务管理系统测试消息', '## 任务管理系统测试消息\n钉钉机器人配置成功。');
-    logNotification('test', 'success', '测试消息发送成功', result);
+    logNotification('test', 'success', '测试消息发送成功', result, user);
     return result;
   } catch (error: any) {
-    logNotification('test', 'failed', error.message || '测试消息发送失败');
+    logNotification('test', 'failed', error.message || '测试消息发送失败', undefined, user);
     throw error;
   }
 }
@@ -220,7 +272,7 @@ export async function pushDashboardNotification(user: AuthUser, action = 'manual
     logNotification(action, 'success', '汇总消息发送成功', {
       developing: summary.inProgress.developing,
       testing: summary.inProgress.testing
-    });
+    }, user);
     return {
       result,
       summary: {
@@ -229,7 +281,7 @@ export async function pushDashboardNotification(user: AuthUser, action = 'manual
       }
     };
   } catch (error: any) {
-    logNotification(action, 'failed', error.message || '汇总消息发送失败');
+    logNotification(action, 'failed', error.message || '汇总消息发送失败', undefined, user);
     throw error;
   }
 }

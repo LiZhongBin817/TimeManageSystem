@@ -1,4 +1,4 @@
-import axios, { AxiosInstance } from 'axios';
+import axios from 'axios';
 import http from 'http';
 import https from 'https';
 import { ModuleConfig } from '../config/modules';
@@ -57,9 +57,53 @@ function excelSerialToDate(value: number) {
   return date.toISOString().slice(0, 10);
 }
 
+async function fetchJson(url: string, options: { method?: string; headers?: Record<string, string>; body?: unknown; timeout?: number } = {}) {
+  const fetchImpl = (globalThis as any).fetch;
+  const AbortControllerImpl = (globalThis as any).AbortController;
+  if (!fetchImpl || !AbortControllerImpl) throw new Error('当前 Node.js 版本不支持 fetch，请升级到 Node 18 或以上');
+  const controller = new AbortControllerImpl();
+  const timer = setTimeout(() => controller.abort(), options.timeout || 12000);
+  try {
+    const response = await fetchImpl(url, {
+      method: options.method || 'GET',
+      headers: {
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...(options.headers || {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let data: any = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
+    if (!response.ok) {
+      const error = new Error(data?.message || data?.errmsg || response.statusText || '钉钉接口请求失败') as Error & {
+        response?: { status: number; data: unknown };
+      };
+      error.response = { status: response.status, data };
+      throw error;
+    }
+    return { data };
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error('钉钉接口请求超时，请检查服务器网络') as Error & { code?: string };
+      timeoutError.code = 'ECONNABORTED';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class DingTalkSheetClient {
   private config: DingTalkConfig;
-  private http: AxiosInstance;
   private memory = JSON.parse(JSON.stringify(mockRows)) as typeof mockRows;
 
   constructor(config?: Partial<DingTalkConfig>) {
@@ -70,7 +114,6 @@ export class DingTalkSheetClient {
       operatorId: config?.operatorId ?? process.env.DINGTALK_OPERATOR_ID,
       baseUrl: config?.baseUrl ?? process.env.DINGTALK_API_BASE_URL ?? 'https://api.dingtalk.com'
     };
-    this.http = axios.create({ baseURL: this.config.baseUrl, timeout: 12000, ...dingTalkAxiosOptions });
   }
 
   get isConfigured() {
@@ -130,7 +173,7 @@ export class DingTalkSheetClient {
     if (cached && cached.expiresAt > Date.now()) return cached.value;
 
     const token = await this.getAccessToken();
-    const response = await this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets`, {
+    const response = await this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets`, {
       headers: { 'x-acs-dingtalk-access-token': token },
       params: { operatorId: this.config.operatorId }
     });
@@ -259,7 +302,7 @@ export class DingTalkSheetClient {
     const lastColumn = columnName(module.fields.length - 1);
     const range = `${module.sheetName}!A${rowNumber}:${lastColumn}${rowNumber}`;
     const response = await this.withRetry(() =>
-      this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+      this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
         headers: { 'x-acs-dingtalk-access-token': token },
         params: { operatorId: this.config.operatorId }
       })
@@ -272,9 +315,12 @@ export class DingTalkSheetClient {
     const cached = accessTokenCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now() + 60000) return cached.value;
 
-    const response = await this.http.post('/v1.0/oauth2/accessToken', {
-      appKey: this.config.appKey,
-      appSecret: this.config.appSecret
+    const response = await this.fetchApi('/v1.0/oauth2/accessToken', {
+      method: 'POST',
+      body: {
+        appKey: this.config.appKey,
+        appSecret: this.config.appSecret
+      }
     });
     const value = response.data?.accessToken;
     if (!value) throw new Error('钉钉 accessToken 获取失败');
@@ -334,14 +380,12 @@ export class DingTalkSheetClient {
 
     for (const body of candidates) {
       try {
-        const response = await this.http.post(
-          `/v1.0/doc/workbooks/${this.config.workbookId}/sheets`,
-          body,
-          {
-            headers: { 'x-acs-dingtalk-access-token': token },
-            params: { operatorId: this.config.operatorId }
-          }
-        );
+        const response = await this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets`, {
+          method: 'POST',
+          headers: { 'x-acs-dingtalk-access-token': token },
+          params: { operatorId: this.config.operatorId },
+          body
+        });
         const data = response.data?.sheet || response.data?.data || response.data?.value || response.data;
         const sheetId = data?.sheetId || data?.id;
         const sheetName = data?.name || data?.sheetName || name;
@@ -363,7 +407,7 @@ export class DingTalkSheetClient {
   private async readRangeValues(module: ModuleConfig, sheetId: string, token: string, lastColumn: string, startRow: number, endRow: number): Promise<unknown[][]> {
     const range = `${module.sheetName}!A${startRow}:${lastColumn}${endRow}`;
     const response = await this.withRetry(() =>
-      this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+      this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
         headers: { 'x-acs-dingtalk-access-token': token },
         params: { operatorId: this.config.operatorId }
       })
@@ -429,14 +473,12 @@ export class DingTalkSheetClient {
     })];
 
     await this.withRetry(() =>
-      this.http.put(
-        `/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`,
-        { values },
-        {
-          headers: { 'x-acs-dingtalk-access-token': token },
-          params: { operatorId: this.config.operatorId }
-        }
-      )
+      this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+        method: 'PUT',
+        headers: { 'x-acs-dingtalk-access-token': token },
+        params: { operatorId: this.config.operatorId },
+        body: { values }
+      })
     );
   }
 
@@ -480,7 +522,7 @@ export class DingTalkSheetClient {
     const lastColumn = columnName(module.fields.length - 1);
     const range = `${module.sheetName}!A${rowNumber}:${lastColumn}${rowNumber}`;
     const response = await this.withRetry(() =>
-      this.http.get(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+      this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
         headers: { 'x-acs-dingtalk-access-token': token },
         params: { operatorId: this.config.operatorId }
       })
@@ -495,14 +537,12 @@ export class DingTalkSheetClient {
     const range = `${module.sheetName}!A${rowNumber}:${lastColumn}${rowNumber}`;
 
     await this.withRetry(() =>
-      this.http.put(
-        `/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`,
-        { values: [values] },
-        {
-          headers: { 'x-acs-dingtalk-access-token': token },
-          params: { operatorId: this.config.operatorId }
-        }
-      )
+      this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {
+        method: 'PUT',
+        headers: { 'x-acs-dingtalk-access-token': token },
+        params: { operatorId: this.config.operatorId },
+        body: { values: [values] }
+      })
     );
   }
 
@@ -527,6 +567,18 @@ export class DingTalkSheetClient {
 
   private worksheetCacheKey() {
     return `${this.tokenCacheKey()}|${this.config.workbookId || ''}|${this.config.operatorId || ''}`;
+  }
+
+  private fetchApi(path: string, options: { method?: string; headers?: Record<string, string>; params?: Record<string, unknown>; body?: unknown } = {}) {
+    const url = new URL(path, this.config.baseUrl);
+    Object.entries(options.params || {}).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+    });
+    return fetchJson(url.toString(), {
+      method: options.method,
+      headers: options.headers,
+      body: options.body
+    });
   }
 }
 

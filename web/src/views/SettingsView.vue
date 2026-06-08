@@ -186,7 +186,7 @@ async function loadNotificationConfig() {
     Object.assign(notificationForm, settings);
     Object.assign(notificationUserForm, userSettings);
     if (!notificationForm.keywords?.length) notificationForm.keywords = ['项目提醒'];
-    if (isAdmin.value) notificationLogs.value = await getNotificationLogs();
+    notificationLogs.value = await getNotificationLogs();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '消息推送配置加载失败');
   }
@@ -543,9 +543,14 @@ onMounted(load);
               :closable="false"
               title="管理员推送全部任务汇总；非管理员只推送研发人员为自己的开发中/测试中任务。"
             />
-            <el-table v-if="isAdmin" :data="notificationLogs" stripe class="notification-log-table">
-              <el-table-column prop="created_at" label="时间" min-width="170" />
-              <el-table-column prop="action" label="类型" width="120" />
+            <el-table :data="notificationLogs" stripe class="notification-log-table">
+              <el-table-column prop="createdAtText" label="时间" min-width="170" />
+              <el-table-column v-if="isAdmin" prop="user_display_name" label="推送人" min-width="120">
+                <template #default="{ row }">
+                  {{ row.user_display_name || row.user_id || '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="actionText" label="类型" width="130" />
               <el-table-column prop="status" label="状态" width="100">
                 <template #default="{ row }">
                   <el-tag :type="row.status === 'success' ? 'success' : 'danger'">{{ row.status }}</el-tag>

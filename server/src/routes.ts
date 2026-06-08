@@ -514,7 +514,7 @@ router.post('/notification/test', async (req, res, next) => {
       res.status(403).json({ message: '只有管理员可以发送测试消息' });
       return;
     }
-    res.json({ result: await sendTestNotification() });
+    res.json({ result: await sendTestNotification(req.user!) });
   } catch (error) {
     next(error);
   }
@@ -534,11 +534,7 @@ router.post('/notification/push-dashboard', async (req, res, next) => {
 
 router.get('/notification/logs', async (req, res, next) => {
   try {
-    if (req.user!.role !== 'admin') {
-      res.status(403).json({ message: '只有管理员可以查看消息推送日志' });
-      return;
-    }
-    res.json({ logs: await listNotificationLogs() });
+    res.json({ logs: await listNotificationLogs(req.user!) });
   } catch (error) {
     next(error);
   }

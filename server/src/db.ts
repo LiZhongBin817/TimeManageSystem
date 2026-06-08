@@ -276,11 +276,15 @@ export async function initDatabase() {
       channel TEXT NOT NULL,
       action TEXT NOT NULL,
       status TEXT NOT NULL,
+      user_id INTEGER,
+      user_display_name TEXT,
       message TEXT,
       payload TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  await ensureColumn('notification_logs', 'user_id', 'INTEGER');
+  await ensureColumn('notification_logs', 'user_display_name', 'TEXT');
 
   run(`
     CREATE TABLE IF NOT EXISTS notification_user_settings (
