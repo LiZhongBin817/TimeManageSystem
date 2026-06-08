@@ -15,11 +15,18 @@ import {
 } from './config/modules';
 import {
   PermissionSubjectType,
+  StaffRole,
   addAuditLog,
   all,
+  copyDataSourceStaffAssignments,
+  countDataSourceStaffAssignments,
   getModulePermission,
+  importStaffOptionsToAssignments,
+  listDataSourceStaffMembers,
+  listDataSourceStaffOptions,
   listModulePermissions,
   listUsers,
+  replaceDataSourceStaffAssignments,
   replaceModulePermissions,
   run,
   upsertEnterpriseMembers,
@@ -79,7 +86,8 @@ const dataSourceSchema = z.object({
   platform: z.enum(['dingtalk', 'feishu']),
   config: z.record(z.string()).default({}),
   enabled: z.boolean().default(true),
-  sortOrder: z.number().default(0)
+  sortOrder: z.number().default(0),
+  staffTemplateDataSourceId: z.number().int().positive().nullable().optional()
 });
 
 const moduleSchema = z.object({
@@ -108,6 +116,23 @@ const fieldsSchema = z.object({
     formula: z.boolean().optional(),
     staffRole: z.enum(['product', 'tester', 'developer']).optional()
   }))
+});
+
+const staffAssignmentSchema = z.object({
+  members: z.array(z.object({
+    userId: z.number().int().positive().nullable().optional(),
+    displayName: z.string().min(1),
+    product: z.boolean().optional(),
+    tester: z.boolean().optional(),
+    developer: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    sortOrder: z.number().optional()
+  }))
+});
+
+const staffInitializeSchema = z.object({
+  sourceDataSourceId: z.number().int().positive(),
+  targetDataSourceId: z.number().int().positive().optional()
 });
 
 const permissionSchema = z.object({
@@ -145,6 +170,35 @@ async function decorateModule(user: NonNullable<Express.Request['user']>, module
 async function readableModules(user: NonNullable<Express.Request['user']>, modules: ModuleConfig[]) {
   const decorated = await Promise.all(modules.map((module) => decorateModule(user, module)));
   return decorated.filter((module) => module.canView);
+}
+
+async function legacyStaffOptionsForDataSource(user: NonNullable<Express.Request['user']>) {
+  const empty: Record<StaffRole, string[]> = { product: [], tester: [], developer: [] };
+  const staffModule = await findModule('staff');
+  if (!staffModule) return empty;
+  const staffDataSourceId = moduleDataSourceId(staffModule, user.dataSourceId);
+  if (staffDataSourceId !== user.dataSourceId) return empty;
+  const client = await getClientForModule(staffModule, user.dataSourceId, user);
+  const rows = await client.getRows(staffModule);
+  const unique = (key: string) =>
+    Array.from(new Set(rows.map((row: any) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
+  return {
+    product: unique('productOwner'),
+    tester: unique('tester'),
+    developer: unique('developer')
+  };
+}
+
+async function ensureStaffAssignments(user: NonNullable<Express.Request['user']>) {
+  if (await countDataSourceStaffAssignments(user.dataSourceId)) return;
+  try {
+    const options = await legacyStaffOptionsForDataSource(user);
+    if (options.product.length || options.tester.length || options.developer.length) {
+      await importStaffOptionsToAssignments(user.dataSourceId, options);
+    }
+  } catch {
+    // Legacy spreadsheet import is best-effort; local staff assignments remain the source of truth.
+  }
 }
 
 router.get('/data-source/platforms', (_req, res) => {
@@ -417,16 +471,64 @@ router.get('/project-modules', async (req, res, next) => {
 
 router.get('/staff-options', async (req, res, next) => {
   try {
-    const staffModule = await findModule('staff');
-    if (!staffModule || !(await modulePermission(req.user!, staffModule)).canView) {
-      res.status(404).json({ message: '人员信息模块不存在或无权访问' });
+    await ensureStaffAssignments(req.user!);
+    res.json(await listDataSourceStaffOptions(req.user!.dataSourceId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/staff/members', async (req, res, next) => {
+  try {
+    await ensureStaffAssignments(req.user!);
+    const [members, options] = await Promise.all([
+      listDataSourceStaffMembers(req.user!.dataSourceId),
+      listDataSourceStaffOptions(req.user!.dataSourceId)
+    ]);
+    res.json({ dataSourceId: req.user!.dataSourceId, members, options });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/staff/assignments', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以维护人员分组' });
       return;
     }
-    const client = await getClientForModule(staffModule, req.user!.dataSourceId, req.user!);
-    const rows = await client.getRows(staffModule);
-    const unique = (key: string) =>
-      Array.from(new Set(rows.map((row: any) => String(row[key] || '').trim()).filter((value) => value && value !== '-')));
-    res.json({ product: unique('productOwner'), tester: unique('tester'), developer: unique('developer') });
+    const parsed = staffAssignmentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '人员分组配置不完整' });
+      return;
+    }
+    const members = await replaceDataSourceStaffAssignments(req.user!.dataSourceId, parsed.data.members);
+    res.json({ dataSourceId: req.user!.dataSourceId, members, options: await listDataSourceStaffOptions(req.user!.dataSourceId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/staff/initialize', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以初始化人员配置' });
+      return;
+    }
+    const parsed = staffInitializeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '请选择人员模板数据源' });
+      return;
+    }
+    const targetDataSourceId = parsed.data.targetDataSourceId || req.user!.dataSourceId;
+    if (parsed.data.sourceDataSourceId === req.user!.dataSourceId) await ensureStaffAssignments(req.user!);
+    const result = await copyDataSourceStaffAssignments(parsed.data.sourceDataSourceId, targetDataSourceId);
+    res.json({
+      ...result,
+      dataSourceId: targetDataSourceId,
+      members: await listDataSourceStaffMembers(targetDataSourceId),
+      options: await listDataSourceStaffOptions(targetDataSourceId)
+    });
   } catch (error) {
     next(error);
   }
@@ -697,6 +799,13 @@ router.post('/data-source/instances', async (req, res, next) => {
       return;
     }
     const instance = await saveDataSource(parsed.data);
+    if (instance?.id && parsed.data.staffTemplateDataSourceId) {
+      const sourceId = Number(parsed.data.staffTemplateDataSourceId);
+      if (sourceId === req.user!.dataSourceId) await ensureStaffAssignments(req.user!);
+      if (sourceId !== instance.id && await countDataSourceStaffAssignments(sourceId)) {
+        await copyDataSourceStaffAssignments(sourceId, instance.id);
+      }
+    }
     res.status(201).json({ instance });
   } catch (error) {
     next(error);

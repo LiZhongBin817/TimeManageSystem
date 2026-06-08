@@ -68,6 +68,31 @@ export interface EnterpriseMemberInput {
   raw?: unknown;
 }
 
+export type StaffRole = 'product' | 'tester' | 'developer';
+
+export interface StaffMemberInput {
+  userId?: number | null;
+  displayName: string;
+  product?: boolean;
+  tester?: boolean;
+  developer?: boolean;
+  enabled?: boolean;
+  sortOrder?: number;
+}
+
+export interface StaffMemberRecord {
+  key: string;
+  userId?: number | null;
+  username?: string;
+  displayName: string;
+  source: 'enterprise' | 'manual';
+  product: boolean;
+  tester: boolean;
+  developer: boolean;
+  enabled: boolean;
+  sortOrder: number;
+}
+
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.resolve(__dirname, '..', 'server-data.db');
@@ -227,6 +252,21 @@ export async function initDatabase() {
       platform TEXT,
       data_source_id INTEGER,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS data_source_staff_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      data_source_id INTEGER NOT NULL,
+      user_id INTEGER,
+      display_name TEXT NOT NULL,
+      staff_role TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(data_source_id, staff_role, display_name)
     )
   `);
 
@@ -459,6 +499,170 @@ export async function getUserDataSourcePreference(userId: number) {
     'SELECT data_source_id, platform FROM user_data_source_preferences WHERE user_id = ?',
     [userId]
   );
+}
+
+const staffRoles: StaffRole[] = ['product', 'tester', 'developer'];
+
+function emptyStaffMember(input: Partial<StaffMemberRecord> & { key: string; displayName: string }): StaffMemberRecord {
+  return {
+    key: input.key,
+    userId: input.userId ?? null,
+    username: input.username,
+    displayName: input.displayName,
+    source: input.source || 'manual',
+    product: Boolean(input.product),
+    tester: Boolean(input.tester),
+    developer: Boolean(input.developer),
+    enabled: input.enabled !== false,
+    sortOrder: input.sortOrder ?? 0
+  };
+}
+
+export async function countDataSourceStaffAssignments(dataSourceId: number) {
+  const row = await get<{ total: number }>(
+    'SELECT COUNT(*) as total FROM data_source_staff_assignments WHERE data_source_id = ?',
+    [dataSourceId]
+  );
+  return Number(row?.total || 0);
+}
+
+export async function listDataSourceStaffMembers(dataSourceId: number): Promise<StaffMemberRecord[]> {
+  const users = await all<UserRecord>('SELECT * FROM users WHERE enabled = 1 ORDER BY display_name, id');
+  const assignments = await all<any>(
+    `SELECT a.*, u.username, u.display_name as user_display_name
+     FROM data_source_staff_assignments a
+     LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.data_source_id = ?
+     ORDER BY a.sort_order, a.display_name, a.staff_role`,
+    [dataSourceId]
+  );
+  const members = new Map<string, StaffMemberRecord>();
+
+  for (const user of users) {
+    members.set(`user:${user.id}`, emptyStaffMember({
+      key: `user:${user.id}`,
+      userId: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      source: 'enterprise'
+    }));
+  }
+
+  for (const assignment of assignments) {
+    const displayName = String(assignment.user_display_name || assignment.display_name || '').trim();
+    if (!displayName) continue;
+    const key = assignment.user_id ? `user:${assignment.user_id}` : `manual:${displayName}`;
+    const member = members.get(key) || emptyStaffMember({
+      key,
+      userId: assignment.user_id || null,
+      username: assignment.username || undefined,
+      displayName,
+      source: assignment.user_id ? 'enterprise' : 'manual',
+      enabled: Boolean(assignment.enabled),
+      sortOrder: assignment.sort_order || 0
+    });
+    if (staffRoles.includes(assignment.staff_role)) {
+      member[assignment.staff_role as StaffRole] = Boolean(assignment.enabled);
+    }
+    member.sortOrder = Math.min(member.sortOrder || Number.MAX_SAFE_INTEGER, assignment.sort_order || 0);
+    members.set(key, member);
+  }
+
+  return Array.from(members.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.displayName.localeCompare(b.displayName, 'zh-Hans-CN'));
+}
+
+export async function listDataSourceStaffOptions(dataSourceId: number) {
+  const rows = await all<{ staff_role: StaffRole; display_name: string }>(
+    `SELECT a.staff_role, COALESCE(NULLIF(u.display_name, ''), a.display_name) as display_name
+     FROM data_source_staff_assignments a
+     LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.data_source_id = ? AND a.enabled = 1
+     ORDER BY a.sort_order, display_name`,
+    [dataSourceId]
+  );
+  const options: Record<StaffRole, string[]> = { product: [], tester: [], developer: [] };
+  const seen: Record<StaffRole, Set<string>> = {
+    product: new Set(),
+    tester: new Set(),
+    developer: new Set()
+  };
+  for (const row of rows) {
+    if (!staffRoles.includes(row.staff_role)) continue;
+    const name = String(row.display_name || '').trim();
+    if (!name || seen[row.staff_role].has(name)) continue;
+    seen[row.staff_role].add(name);
+    options[row.staff_role].push(name);
+  }
+  return options;
+}
+
+export async function replaceDataSourceStaffAssignments(dataSourceId: number, members: StaffMemberInput[]) {
+  await withPersistenceBatch(() => {
+    run('DELETE FROM data_source_staff_assignments WHERE data_source_id = ?', [dataSourceId]);
+    members.forEach((member, memberIndex) => {
+      const displayName = String(member.displayName || '').trim();
+      if (!displayName) return;
+      staffRoles.forEach((role, roleIndex) => {
+        if (!member[role]) return;
+        run(
+          `INSERT OR REPLACE INTO data_source_staff_assignments
+           (data_source_id, user_id, display_name, staff_role, enabled, sort_order, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+          [
+            dataSourceId,
+            member.userId || null,
+            displayName,
+            role,
+            member.enabled === false ? 0 : 1,
+            member.sortOrder ?? memberIndex * 10 + roleIndex
+          ]
+        );
+      });
+    });
+  });
+  return listDataSourceStaffMembers(dataSourceId);
+}
+
+export async function copyDataSourceStaffAssignments(sourceDataSourceId: number, targetDataSourceId: number) {
+  const rows = await all<any>(
+    'SELECT user_id, display_name, staff_role, enabled, sort_order FROM data_source_staff_assignments WHERE data_source_id = ? ORDER BY sort_order, id',
+    [sourceDataSourceId]
+  );
+  await withPersistenceBatch(() => {
+    run('DELETE FROM data_source_staff_assignments WHERE data_source_id = ?', [targetDataSourceId]);
+    rows.forEach((row) => {
+      run(
+        `INSERT OR REPLACE INTO data_source_staff_assignments
+         (data_source_id, user_id, display_name, staff_role, enabled, sort_order, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [
+          targetDataSourceId,
+          row.user_id || null,
+          row.display_name,
+          row.staff_role,
+          row.enabled === 0 ? 0 : 1,
+          row.sort_order || 0
+        ]
+      );
+    });
+  });
+  return { copied: rows.length };
+}
+
+export async function importStaffOptionsToAssignments(dataSourceId: number, options: Record<StaffRole, string[]>) {
+  const byName = new Map<string, StaffMemberInput>();
+  staffRoles.forEach((role) => {
+    for (const name of options[role] || []) {
+      const displayName = String(name || '').trim();
+      if (!displayName || displayName === '-') continue;
+      const item = byName.get(displayName) || { displayName };
+      item[role] = true;
+      byName.set(displayName, item);
+    }
+  });
+  if (!byName.size) return { imported: 0 };
+  await replaceDataSourceStaffAssignments(dataSourceId, Array.from(byName.values()));
+  return { imported: byName.size };
 }
 
 export async function getUserIdentityForProvider(userId: number, provider: IdentityProvider) {

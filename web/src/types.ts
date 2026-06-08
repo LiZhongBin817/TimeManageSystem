@@ -39,6 +39,31 @@ export interface DataSourceInstance {
   config: Record<string, string>;
   enabled: boolean;
   sortOrder: number;
+  staffTemplateDataSourceId?: number | null;
+}
+
+export interface StaffMember {
+  key: string;
+  userId?: number | null;
+  username?: string;
+  displayName: string;
+  source: 'enterprise' | 'manual';
+  product: boolean;
+  tester: boolean;
+  developer: boolean;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export interface StaffMembersResponse {
+  dataSourceId: number;
+  members: StaffMember[];
+  options: {
+    product: string[];
+    tester: string[];
+    developer: string[];
+  };
+  copied?: number;
 }
 
 export interface ModuleField {

@@ -1,8 +1,12 @@
 import axios from 'axios';
+import http from 'http';
+import https from 'https';
 import { DataSourceInstance } from '../config/configStore';
 import { IdentityProvider } from '../db';
 
-const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 8000);
+const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 15000);
+const oauthHttpAgent = new http.Agent({ family: 4 });
+const oauthHttpsAgent = new https.Agent({ family: 4 });
 
 interface FetchJsonOptions {
   method?: string;
@@ -11,48 +15,31 @@ interface FetchJsonOptions {
 }
 
 async function fetchJson(url: string, options: FetchJsonOptions = {}) {
-  const fetchImpl = (globalThis as any).fetch;
-  const AbortControllerImpl = (globalThis as any).AbortController;
-  if (!fetchImpl || !AbortControllerImpl) {
-    throw new Error('当前 Node.js 版本不支持 fetch，请升级到 Node 18 或以上');
-  }
-
-  const controller = new AbortControllerImpl();
-  const timer = setTimeout(() => controller.abort(), OAUTH_REQUEST_TIMEOUT);
   try {
-    const response = await fetchImpl(url, {
+    const response = await axios.request({
+      url,
       method: options.method || 'GET',
       headers: {
         ...(options.body ? { 'content-type': 'application/json' } : {}),
         ...(options.headers || {})
       },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal
+      data: options.body,
+      timeout: OAUTH_REQUEST_TIMEOUT,
+      httpAgent: oauthHttpAgent,
+      httpsAgent: oauthHttpsAgent
     });
-    const text = await response.text();
-    let data: any = {};
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
-    if (!response.ok) {
-      const error = new Error(data?.message || data?.msg || response.statusText || '请求失败') as Error & { response?: { status: number; data: unknown } };
-      error.response = { status: response.status, data };
-      throw error;
-    }
-    return { data };
+    return { data: response.data };
   } catch (error: any) {
-    if (error?.name === 'AbortError') {
-      const timeoutError = new Error('请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络') as Error & { code?: string };
+    if (error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
+      const timeoutError = new Error('请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络') as Error & {
+        code?: string;
+        response?: unknown;
+      };
       timeoutError.code = 'ECONNABORTED';
+      timeoutError.response = error.response;
       throw timeoutError;
     }
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

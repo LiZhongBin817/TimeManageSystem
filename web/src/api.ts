@@ -12,6 +12,8 @@ import type {
   PermissionSubjectType,
   PlatformKey,
   SheetRow,
+  StaffMember,
+  StaffMembersResponse,
   User
 } from './types';
 
@@ -158,6 +160,21 @@ export async function getProjectRows(moduleKey: string) {
 
 export async function getStaffOptions() {
   const { data } = await api.get<{ product: string[]; tester: string[]; developer: string[] }>('/staff-options');
+  return data;
+}
+
+export async function getStaffMembers() {
+  const { data } = await api.get<StaffMembersResponse>('/staff/members');
+  return data;
+}
+
+export async function saveStaffAssignments(members: StaffMember[]) {
+  const { data } = await api.put<StaffMembersResponse>('/staff/assignments', { members });
+  return data;
+}
+
+export async function initializeStaffAssignments(sourceDataSourceId: number, targetDataSourceId?: number) {
+  const { data } = await api.post<StaffMembersResponse>('/staff/initialize', { sourceDataSourceId, targetDataSourceId });
   return data;
 }
 

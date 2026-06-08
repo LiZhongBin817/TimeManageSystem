@@ -6,6 +6,7 @@ import LoginView from './views/LoginView.vue';
 import ModuleView from './views/ModuleView.vue';
 import OAuthCallbackView from './views/OAuthCallbackView.vue';
 import ProjectModulesView from './views/ProjectModulesView.vue';
+import StaffView from './views/StaffView.vue';
 import SettingsView from './views/SettingsView.vue';
 
 export const router = createRouter({
@@ -20,6 +21,7 @@ export const router = createRouter({
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', component: DashboardView },
         { path: 'project-modules', component: ProjectModulesView },
+        { path: 'modules/staff', component: StaffView },
         { path: 'modules/:moduleKey', component: ModuleView, props: true },
         { path: 'settings', component: SettingsView }
       ]

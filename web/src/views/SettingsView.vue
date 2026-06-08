@@ -14,6 +14,7 @@ import {
   getPermissions,
   getReferenceModules,
   getUsers,
+  initializeStaffAssignments,
   pushDashboardNotification,
   saveConfigModule,
   saveDataSourceInstance,
@@ -86,6 +87,9 @@ const notificationUserForm = reactive<NotificationUserSettings>({
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
 const sourceOptions = computed(() => sources.value.map((item) => ({ label: item.name, value: item.id })));
 const sourceNameById = computed(() => new Map(sources.value.map((item) => [item.id, item.name])));
+const staffTemplateOptions = computed(() => sources.value
+  .filter((item) => item.id && item.id !== sourceForm.id)
+  .map((item) => ({ label: item.name, value: item.id! })));
 const referenceModuleOptions = computed(() => {
   const currentKey = moduleForm.id ? moduleForm.key : '';
   return referenceModules.value
@@ -113,6 +117,7 @@ function emptySource(): DataSourceInstance {
     platform: 'dingtalk',
     enabled: true,
     sortOrder: 0,
+    staffTemplateDataSourceId: null,
     config: {
       appKey: '',
       appSecret: '',
@@ -313,11 +318,13 @@ function onPermissionSubjectTypeChange() {
 
 function openSourceCreate() {
   assign(sourceForm, emptySource());
+  sourceForm.staffTemplateDataSourceId = me.value?.dataSourceId || sources.value.find((item) => item.id)?.id || null;
   sourceDialogOpen.value = true;
 }
 
 function openSourceEdit(row: DataSourceInstance) {
   assign(sourceForm, { ...row, config: { ...emptySource().config, ...row.config } });
+  sourceForm.staffTemplateDataSourceId = null;
   sourceDialogOpen.value = true;
 }
 
@@ -330,6 +337,27 @@ async function submitSource() {
     load();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '保存失败');
+  }
+}
+
+async function initializeStaffForSource(row: DataSourceInstance) {
+  if (!row.id) return;
+  const templateId = sources.value.find((item) => item.id && item.id !== row.id && item.id === me.value?.dataSourceId)?.id
+    || sources.value.find((item) => item.id && item.id !== row.id)?.id;
+  if (!templateId) {
+    ElMessage.warning('暂无可用的人员模板来源');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm(
+      `会用「${sourceNameById.value.get(templateId) || '模板数据源'}」的人员分组覆盖「${row.name}」，确认继续？`,
+      '初始化人员配置',
+      { type: 'warning' }
+    );
+    const result = await initializeStaffAssignments(templateId, row.id);
+    ElMessage.success(`人员配置初始化完成，复制 ${result.copied || 0} 条角色记录`);
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '初始化人员配置失败');
   }
 }
 
@@ -481,8 +509,9 @@ onMounted(load);
               </template>
             </el-table-column>
             <el-table-column prop="sortOrder" label="排序" width="90" />
-            <el-table-column label="操作" width="180">
+            <el-table-column label="操作" width="250">
               <template #default="{ row }">
+                <el-button v-if="isAdmin" size="small" @click="initializeStaffForSource(row)">初始化人员</el-button>
                 <el-button :icon="Edit" circle @click="openSourceEdit(row)" />
                 <el-button :icon="Delete" circle type="danger" @click="removeSource(row)" />
               </template>
@@ -673,6 +702,12 @@ onMounted(load);
               <el-option label="飞书" value="feishu" />
             </el-select>
             <div class="field-help">选择该实例使用的表格平台，平台不同，需要填写的接入信息也不同。</div>
+          </el-form-item>
+          <el-form-item v-if="!sourceForm.id" label="人员模板来源">
+            <el-select v-model="sourceForm.staffTemplateDataSourceId" class="full-field" clearable filterable placeholder="选择要复制的人员分组">
+              <el-option v-for="item in staffTemplateOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <div class="field-help">新建数据源后，会复制该数据源下的产品、测试、研发人员分组；为空则创建空人员配置。</div>
           </el-form-item>
         </div>
         <template v-if="isAdmin">
