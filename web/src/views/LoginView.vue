@@ -3,7 +3,7 @@ import { Connection, Lock, User } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getDataSourceInstances, getDataSourcePlatforms, getLoginConfig, login, oauthStartUrl } from '../api';
+import { clearToken, getDataSourceInstances, getDataSourcePlatforms, getLoginConfig, login, oauthStartUrl } from '../api';
 import type { DataSourceInstance, DataSourcePlatform, PlatformKey } from '../types';
 
 type LoginMode = 'oauth' | 'local';
@@ -52,7 +52,8 @@ function startOAuthLogin() {
     ElMessage.warning('当前平台未配置可用数据源，请先到系统配置中绑定');
     return;
   }
-  location.href = oauthStartUrl(form.platform);
+  clearToken();
+  location.href = oauthStartUrl(form.platform, activeInstance.value?.id);
 }
 
 async function submitLocalLogin() {

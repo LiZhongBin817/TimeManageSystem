@@ -633,7 +633,14 @@ onMounted(load);
             <el-button type="primary" :icon="Plus" @click="openSourceCreate">新增实例</el-button>
           </div>
           <el-table :data="sources" stripe>
-            <el-table-column prop="name" label="实例名称" min-width="180" />
+            <el-table-column prop="name" label="实例名称" min-width="220">
+              <template #default="{ row }">
+                <span class="source-name-cell">
+                  <span>{{ row.name }}</span>
+                  <el-tag v-if="row.id === me?.dataSourceId" size="small" type="success">当前使用</el-tag>
+                </span>
+              </template>
+            </el-table-column>
             <el-table-column prop="platform" label="平台" width="110">
               <template #default="{ row }">{{ row.platform === 'feishu' ? '飞书' : '钉钉' }}</template>
             </el-table-column>

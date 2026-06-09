@@ -68,8 +68,9 @@ export async function login(username: string, password: string, platform: Platfo
   return data;
 }
 
-export function oauthStartUrl(provider: PlatformKey) {
-  return `/api/auth/oauth/${provider}/start`;
+export function oauthStartUrl(provider: PlatformKey, dataSourceId?: number) {
+  const query = dataSourceId ? `?dataSourceId=${encodeURIComponent(dataSourceId)}` : '';
+  return `/api/auth/oauth/${provider}/start${query}`;
 }
 
 export async function getLoginConfig() {

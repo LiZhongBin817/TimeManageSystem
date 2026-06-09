@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { getToken } from './api';
+import { clearToken, getToken } from './api';
 import AppShell from './views/AppShell.vue';
 import DashboardView from './views/DashboardView.vue';
 import LoginView from './views/LoginView.vue';
@@ -34,6 +34,10 @@ router.beforeEach((to) => {
     return '/login';
   }
   if (to.path === '/login' && getToken()) {
+    if (to.query.oauthError || to.query.force === '1') {
+      clearToken();
+      return true;
+    }
     return '/dashboard';
   }
   return true;

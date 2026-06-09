@@ -115,11 +115,11 @@ watch(
           <p class="eyebrow">{{ user?.dataSourceName || '数据源未选择' }}</p>
           <h2>{{ pageTitle }}</h2>
         </div>
+        <div id="topbar-actions" class="topbar-actions"></div>
         <div class="topbar-clock">
           <span>当前日期：{{ currentDateText }}</span>
           <span>当前时间：{{ currentTimeText }}</span>
         </div>
-        <div id="topbar-actions" class="topbar-actions"></div>
         <div class="user-box">
           <span>{{ user?.displayName }}</span>
           <el-tag size="small">{{ user?.role }}</el-tag>

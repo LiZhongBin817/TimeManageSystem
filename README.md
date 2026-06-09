@@ -1,6 +1,6 @@
 # TimeManageSystem
 
-任务管理系统。前端使用 Vue 3 + Vite + Element Plus + ECharts，后端使用 Node.js + Express + TypeScript，钉钉表格作为主数据源，SQLite 保存账号、权限和审计日志。
+任务管理系统。前端使用 Vue 3 + Vite + Element Plus + ECharts，后端使用 Node.js + Express + TypeScript，本地 SQLite 优先保存业务数据、账号、权限、配置、日志和同步状态，并按配置与钉钉表格同步。
 
 ## 启动
 
@@ -33,3 +33,9 @@ DINGTALK_OPERATOR_ID=
 ```
 
 如果配置缺失，服务端自动使用 mock 数据，方便先验收页面和交互。配置齐全后，后端会通过钉钉开放接口读取和写入表格数据；前端不会接触钉钉密钥。
+
+## 文档
+
+- [使用文档](docs/任务管理系统使用文档.md)
+- [部署文档](docs/任务管理系统部署文档.md)
+- [数据库表结构](docs/数据库表结构.md)

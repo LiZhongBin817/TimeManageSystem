@@ -144,9 +144,11 @@ body {
 
 .topbar-clock {
   flex-shrink: 0;
+  align-self: center;
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-right: 14px;
   padding: 5px 10px;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -200,11 +202,13 @@ body {
 }
 
 .staff-header {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(420px, 0.95fr);
   gap: 18px;
   align-items: center;
   margin-bottom: 14px;
+  padding-right: 118px;
 }
 
 .staff-header .eyebrow {
@@ -253,6 +257,19 @@ body {
   font-size: 30px;
   line-height: 1;
   color: #0f172a;
+}
+
+.staff-refresh-button {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.staff-topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .staff-actions {
@@ -323,6 +340,12 @@ body {
 
 .permission-subject-select {
   width: 280px;
+}
+
+.source-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .metric-grid {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, Plus, Refresh, Upload, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   getDataSourceInstances,
   getMe,
@@ -20,6 +20,7 @@ const user = ref<User>();
 const sources = ref<DataSourceInstance[]>([]);
 const members = ref<StaffMember[]>([]);
 const templateDataSourceId = ref<number>();
+const staffTopbarActionsEl = ref<HTMLElement | null>(null);
 
 const isAdmin = computed(() => user.value?.role === 'admin');
 const currentSourceName = computed(() => user.value?.dataSourceName || '-');
@@ -142,11 +143,33 @@ async function initializeFromTemplate() {
   }
 }
 
-onMounted(load);
+async function mountStaffTopbarActions() {
+  await nextTick();
+  const target = document.getElementById('topbar-actions');
+  const actions = staffTopbarActionsEl.value;
+  if (!target || !actions) return;
+  if (actions.parentElement !== target) target.replaceChildren(actions);
+}
+
+onMounted(() => {
+  load();
+  mountStaffTopbarActions();
+});
+
+onBeforeUnmount(() => {
+  const target = document.getElementById('topbar-actions');
+  if (target && staffTopbarActionsEl.value && target.contains(staffTopbarActionsEl.value)) {
+    target.replaceChildren();
+  }
+});
 </script>
 
 <template>
   <main v-loading="loading" class="content staff-page">
+    <div ref="staffTopbarActionsEl" class="staff-topbar-actions">
+      <el-button :icon="Refresh" @click="load">刷新</el-button>
+    </div>
+
     <section class="staff-header panel">
       <div>
         <p class="eyebrow">本地人员分组</p>
@@ -167,12 +190,9 @@ onMounted(load);
           <strong>{{ roleSummary.developer }}</strong>
         </article>
       </div>
-      <el-button class="staff-refresh-button" :icon="Refresh" @click="load">刷新</el-button>
     </section>
 
-    <section class="filter-panel staff-actions">
-      <el-button :icon="Refresh" @click="load">刷新</el-button>
-      <template v-if="isAdmin">
+    <section v-if="isAdmin" class="filter-panel staff-actions">
         <el-button type="primary" :icon="Upload" :loading="syncing" @click="syncMembers">同步企业成员</el-button>
         <el-select v-model="templateDataSourceId" class="staff-template-select" placeholder="人员模板来源" clearable filterable>
           <el-option v-for="item in templateOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -180,7 +200,6 @@ onMounted(load);
         <el-button :loading="initializing" @click="initializeFromTemplate">初始化人员配置</el-button>
         <el-button :icon="Plus" @click="addManualMember">新增外部人员</el-button>
         <el-button type="primary" :loading="saving" @click="submit">保存人员分组</el-button>
-      </template>
     </section>
 
     <el-alert

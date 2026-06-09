@@ -129,7 +129,7 @@ export function frontendCallbackUrl(token: string) {
 
 export function frontendLoginErrorUrl(message: string) {
   const base = process.env.FRONTEND_BASE_URL || 'http://localhost:5173';
-  return `${base}/login?oauthError=${encodeURIComponent(message)}`;
+  return `${base}/login?force=1&oauthError=${encodeURIComponent(message)}`;
 }
 
 export function authUrl(provider: IdentityProvider, dataSource: DataSourceInstance, redirectUri: string, state: string) {
