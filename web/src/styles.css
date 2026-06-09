@@ -239,6 +239,40 @@ body {
   justify-content: space-between;
 }
 
+.project-module-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+
+.project-module-tools,
+.project-module-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.project-module-tools {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-module-actions {
+  flex-shrink: 0;
+}
+
+.project-search-input {
+  width: min(420px, 42vw);
+}
+
+.project-advanced-filters {
+  align-items: flex-start;
+  padding: 12px 14px;
+}
+
 .permission-toolbar {
   justify-content: flex-start;
 }
@@ -985,6 +1019,18 @@ body {
     gap: 12px;
     padding: 14px 16px;
     flex-direction: column;
+  }
+
+  .project-module-header,
+  .project-module-tools,
+  .project-module-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .project-search-input,
+  .module-select {
+    width: 100%;
   }
 }
 

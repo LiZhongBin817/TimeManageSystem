@@ -1332,17 +1332,41 @@ export function markLocalModuleRowSync(input: {
 }
 
 export async function createSyncJob(input: { platform: string; dataSourceId?: number; moduleKey?: string; direction: string }) {
+  const dataSourceId = input.dataSourceId ?? null;
+  const moduleKey = input.moduleKey || null;
   run(
     'INSERT INTO sync_jobs (platform, data_source_id, module_key, direction, status) VALUES (?, ?, ?, ?, ?)',
-    [input.platform, input.dataSourceId ?? null, input.moduleKey || null, input.direction, 'running']
+    [input.platform, dataSourceId, moduleKey, input.direction, 'running']
   );
-  return (await get<{ id: number }>('SELECT last_insert_rowid() as id'))?.id || 0;
+  const row = await get<{ id: number }>(
+    `SELECT id FROM sync_jobs
+     WHERE platform = ?
+       AND COALESCE(data_source_id, -1) = COALESCE(?, -1)
+       AND COALESCE(module_key, '') = COALESCE(?, '')
+       AND direction = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [input.platform, dataSourceId, moduleKey, input.direction]
+  );
+  return row?.id || 0;
 }
 
 export function finishSyncJob(input: { id: number; status: 'success' | 'failed'; totalRows?: number; message?: string }) {
   run(
     'UPDATE sync_jobs SET status = ?, total_rows = ?, message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?',
     [input.status, input.totalRows || 0, input.message || '', input.id]
+  );
+}
+
+export function failStaleRunningSyncJobs(minutes = 30) {
+  run(
+    `UPDATE sync_jobs
+     SET status = 'failed',
+         message = CASE WHEN message = '' THEN '任务中断或服务重启，已自动标记失败' ELSE message END,
+         finished_at = CURRENT_TIMESTAMP
+     WHERE status = 'running'
+       AND datetime(started_at) <= datetime('now', ?)`,
+    [`-${minutes} minutes`]
   );
 }
 

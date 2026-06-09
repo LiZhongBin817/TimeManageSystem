@@ -131,6 +131,37 @@ const permissionSubjectOptions = computed(() => {
   return users.value.map((user) => ({ label: `${user.displayName}（${user.role}）`, value: String(user.id) }));
 });
 
+function formatShanghaiTime(value: unknown) {
+  const text = String(value || '').trim();
+  if (!text) return '-';
+  const normalized = text.includes('T') ? text : `${text.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return text;
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date).replace(/\//g, '-');
+}
+
+function syncDirectionText(value: unknown) {
+  return value === 'push' ? '本地到钉钉' : value === 'pull' ? '钉钉到本地' : String(value || '-');
+}
+
+function syncStatusText(value: unknown) {
+  const text = String(value || '');
+  if (text === 'success') return '成功';
+  if (text === 'failed') return '失败';
+  if (text === 'running') return '运行中';
+  if (text === 'skipped') return '已跳过';
+  return text || '-';
+}
+
 function emptySource(): DataSourceInstance {
   return {
     name: '',
@@ -671,10 +702,16 @@ onMounted(load);
               <span>最近从钉钉拉取到本地数据库的定时或手动同步记录。</span>
             </div>
             <el-table :data="syncOverview?.jobs || []" stripe>
-              <el-table-column prop="started_at" label="开始时间" min-width="170" />
+              <el-table-column label="开始时间" min-width="190">
+                <template #default="{ row }">{{ formatShanghaiTime(row.started_at) }}</template>
+              </el-table-column>
               <el-table-column prop="module_key" label="模块" min-width="150" />
-              <el-table-column prop="direction" label="方向" width="100" />
-              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column label="方向" width="120">
+                <template #default="{ row }">{{ syncDirectionText(row.direction) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">{{ syncStatusText(row.status) }}</template>
+              </el-table-column>
               <el-table-column prop="total_rows" label="行数" width="90" />
               <el-table-column prop="message" label="说明" min-width="220" />
             </el-table>
@@ -685,9 +722,13 @@ onMounted(load);
               <span>查看钉钉用户数据是否已经同步到本地用户。</span>
             </div>
             <el-table :data="syncOverview?.memberLogs || []" stripe>
-              <el-table-column prop="created_at" label="时间" min-width="170" />
+              <el-table-column label="时间" min-width="190">
+                <template #default="{ row }">{{ formatShanghaiTime(row.created_at) }}</template>
+              </el-table-column>
               <el-table-column prop="provider" label="平台" width="110" />
-              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">{{ syncStatusText(row.status) }}</template>
+              </el-table-column>
               <el-table-column prop="total" label="总数" width="90" />
               <el-table-column prop="created" label="新增" width="90" />
               <el-table-column prop="updated" label="更新" width="90" />

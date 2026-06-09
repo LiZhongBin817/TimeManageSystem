@@ -1,13 +1,16 @@
 import cors from 'cors';
+import dns from 'dns';
 import './env';
 import express, { NextFunction, Request, Response } from 'express';
-import { initDatabase } from './db';
+import { failStaleRunningSyncJobs, initDatabase } from './db';
 import { router } from './routes';
 import { startDingTalkSyncScheduler } from './services/dingtalkSyncScheduler';
 import { startNotificationScheduler } from './services/notificationScheduler';
 
 const app = express();
 const port = Number(process.env.PORT || 4000);
+
+dns.setDefaultResultOrder('ipv4first');
 
 function warnRuntimeConfig() {
   const publicBase = process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL || '';
@@ -44,6 +47,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 initDatabase()
   .then(() => {
+    failStaleRunningSyncJobs(30);
     warnRuntimeConfig();
     startDingTalkSyncScheduler();
     startNotificationScheduler();

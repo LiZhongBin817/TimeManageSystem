@@ -59,10 +59,12 @@ export function startDingTalkSyncScheduler() {
   timer = setInterval(tick, 60 * 1000);
   getDingTalkSyncSettings()
     .then((settings) => {
+      if (settings.enabled && timeInShanghai() >= settings.scheduledTime) {
+        lastSyncDate = todayInShanghai();
+      }
       if (settings.enabled && settings.startupSyncEnabled) {
         setTimeout(() => runSync('startup'), settings.startupDelayMs);
       }
     })
     .catch((error) => console.error('[dingtalk-sync] failed to load startup settings', error));
-  tick();
 }

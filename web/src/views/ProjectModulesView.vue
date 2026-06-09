@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue';
+import { Delete, Edit, Filter, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
@@ -23,6 +23,7 @@ const canDelete = ref(false);
 const user = ref<User>();
 const rows = ref<SheetRow[]>([]);
 const keyword = ref('');
+const showAdvancedFilters = ref(false);
 const filters = reactive({
   content: '',
   isCompleted: '',
@@ -57,6 +58,17 @@ const filteredRows = computed(() => {
 });
 
 const editableFields = computed(() => (moduleConfig.value?.fields || []).filter((field) => !isFormHidden(field)));
+const activeAdvancedFilterCount = computed(() => {
+  let total = 0;
+  if (filters.isCompleted) total += 1;
+  if (filters.plannedTestAt.length) total += 1;
+  if (filters.actualTestAt.length) total += 1;
+  if (filters.launchAt.length) total += 1;
+  if (filters.developer) total += 1;
+  if (filters.productOwner) total += 1;
+  if (filters.tester) total += 1;
+  return total;
+});
 
 function isFormulaField(field: ModuleField) {
   return field.formula || field.type === 'formula' || field.key === 'isCompleted' || field.key === 'name';
@@ -226,16 +238,23 @@ onMounted(refreshAll);
 
 <template>
   <main v-loading="loading" class="content">
-    <div class="toolbar project-toolbar">
-      <el-select v-model="selectedKey" class="module-select" placeholder="选择子模块" filterable>
-        <el-option v-for="item in modules" :key="item.key" :label="item.title" :value="item.key" />
-      </el-select>
-      <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前子模块数据" clearable />
-      <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-      <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
-    </div>
+    <section class="project-module-header panel">
+      <div class="project-module-tools">
+        <el-select v-model="selectedKey" class="module-select" placeholder="选择子模块" filterable>
+          <el-option v-for="item in modules" :key="item.key" :label="item.title" :value="item.key" />
+        </el-select>
+        <el-input v-model="keyword" class="project-search-input" :prefix-icon="Search" placeholder="搜索当前模块" clearable />
+        <el-button :icon="Filter" @click="showAdvancedFilters = !showAdvancedFilters">
+          筛选<span v-if="activeAdvancedFilterCount">（{{ activeAdvancedFilterCount }}）</span>
+        </el-button>
+      </div>
+      <div class="project-module-actions">
+        <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
+        <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
+      </div>
+    </section>
 
-    <section class="filter-panel">
+    <section v-if="showAdvancedFilters || activeAdvancedFilterCount" class="filter-panel project-advanced-filters">
       <el-alert
         v-if="isRestrictedUser"
         type="info"
@@ -243,7 +262,6 @@ onMounted(refreshAll);
         class="ownership-alert"
         :title="`当前仅显示研发人员为 ${user?.displayName || '-'} 的项目数据`"
       />
-      <el-input v-if="hasField('content')" v-model="filters.content" class="filter-item" placeholder="按内容过滤" clearable />
       <el-select v-if="hasField('isCompleted')" v-model="filters.isCompleted" class="filter-item" placeholder="是否完成" clearable>
         <el-option label="是" value="是" />
         <el-option label="否" value="否" />
@@ -265,7 +283,7 @@ onMounted(refreshAll);
 
     <section class="panel">
       <el-empty v-if="!modules.length" description="暂无启用的项目子模块，请到系统配置中新建模块" />
-      <el-table v-else :data="filteredRows" height="calc(100vh - 325px)" stripe>
+      <el-table v-else :data="filteredRows" height="calc(100vh - 250px)" stripe>
         <el-table-column v-for="field in moduleConfig?.fields || []" :key="field.key" :prop="field.key" :label="field.label" min-width="150" sortable>
           <template #default="{ row }">
             <el-tag v-if="field.type === 'status'" size="small">{{ row[field.key] || '-' }}</el-tag>

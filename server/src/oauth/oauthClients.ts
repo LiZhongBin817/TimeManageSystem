@@ -26,16 +26,24 @@ async function fetchJson(url: string, options: FetchJsonOptions = {}) {
       },
       data: options.body,
       timeout: OAUTH_REQUEST_TIMEOUT,
-      adapter: 'fetch',
       httpAgent: oauthHttpAgent,
-      httpsAgent: oauthHttpsAgent
+      httpsAgent: oauthHttpsAgent,
+      validateStatus: () => true
     });
     console.log(`[oauth] ${options.method || 'GET'} ${url} -> ${response.status} in ${Date.now() - startedAt}ms`);
+    if (response.status < 200 || response.status >= 300) {
+      const data = response.data || {};
+      const httpError = new Error(data?.message || data?.msg || response.statusText || 'OAuth request failed') as Error & {
+        response?: { status: number; data: unknown };
+      };
+      httpError.response = { status: response.status, data };
+      throw httpError;
+    }
     return { data: response.data };
   } catch (error: any) {
-    console.warn(`[oauth] ${options.method || 'GET'} ${url} failed in ${Date.now() - startedAt}ms: ${error?.code || ''} ${error?.response?.status || ''} ${error?.message || error}`);
-    if (error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
-      const timeoutError = new Error('请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络') as Error & {
+    console.warn(`[oauth] ${options.method || 'GET'} ${url} failed in ${Date.now() - startedAt}ms: ${error?.code || error?.name || ''} ${error?.response?.status || ''} ${error?.message || error}`);
+    if (error?.name === 'TimeoutError' || error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
+      const timeoutError = new Error('DingTalk/Feishu OAuth request timed out. Please retry later or check server network.') as Error & {
         code?: string;
         response?: unknown;
       };
@@ -43,10 +51,10 @@ async function fetchJson(url: string, options: FetchJsonOptions = {}) {
       timeoutError.response = error.response;
       throw timeoutError;
     }
+    if (error?.message === 'fetch failed' || error?.name === 'TypeError') error.code = error.code || 'ERR_NETWORK';
     throw error;
   }
 }
-
 function isTransientOAuthError(error: any) {
   const status = error?.response?.status;
   const code = String(error?.code || '');

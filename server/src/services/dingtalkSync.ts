@@ -3,7 +3,19 @@ import { createSyncJob, finishSyncJob } from '../db';
 import { DingTalkSheetClient } from '../dingtalk/client';
 import { moduleDataSourceId } from '../dataSources';
 
+let syncing = false;
+
 export async function syncDingTalkToLocal(options: { dataSourceId?: number; moduleKey?: string } = {}) {
+  if (syncing) {
+    return {
+      total: 0,
+      success: 0,
+      failed: 0,
+      results: [{ dataSourceId: options.dataSourceId || 0, moduleKey: options.moduleKey || 'all', rows: 0, status: 'skipped', message: 'sync already running' }]
+    };
+  }
+  syncing = true;
+  try {
   const dataSources = (await listDataSources('dingtalk', false))
     .filter((item) => !options.dataSourceId || item.id === options.dataSourceId);
   const results: Array<{ dataSourceId: number; moduleKey: string; rows: number; status: string; message?: string }> = [];
@@ -64,4 +76,7 @@ export async function syncDingTalkToLocal(options: { dataSourceId?: number; modu
     failed: results.filter((item) => item.status === 'failed').length,
     results
   };
+  } finally {
+    syncing = false;
+  }
 }
