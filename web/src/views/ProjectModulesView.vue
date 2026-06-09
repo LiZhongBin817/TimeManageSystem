@@ -58,6 +58,16 @@ const filteredRows = computed(() => {
 });
 
 const editableFields = computed(() => (moduleConfig.value?.fields || []).filter((field) => !isFormHidden(field)));
+const moduleOptions = computed(() => {
+  const titleCounts = modules.value.reduce<Record<string, number>>((counts, item) => {
+    counts[item.title] = (counts[item.title] || 0) + 1;
+    return counts;
+  }, {});
+  return modules.value.map((item) => ({
+    ...item,
+    optionLabel: titleCounts[item.title] > 1 ? `${item.title}（${item.key}）` : item.title
+  }));
+});
 const activeAdvancedFilterCount = computed(() => {
   let total = 0;
   if (filters.isCompleted) total += 1;
@@ -241,7 +251,7 @@ onMounted(refreshAll);
     <section class="project-module-header panel">
       <div class="project-module-tools">
         <el-select v-model="selectedKey" class="module-select" placeholder="选择子模块" filterable>
-          <el-option v-for="item in modules" :key="item.key" :label="item.title" :value="item.key" />
+          <el-option v-for="item in moduleOptions" :key="item.key" :label="item.optionLabel" :value="item.key" />
         </el-select>
         <el-input v-model="keyword" class="project-search-input" :prefix-icon="Search" placeholder="搜索当前模块" clearable />
         <el-button :icon="Filter" @click="showAdvancedFilters = !showAdvancedFilters">

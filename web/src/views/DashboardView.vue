@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Bell, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { getMe, getSummary, pushDashboardNotification } from '../api';
 import type { User } from '../types';
 
@@ -37,6 +37,7 @@ const loading = ref(false);
 const pushing = ref(false);
 const summary = ref<any>();
 const user = ref<User>();
+const dashboardActionsEl = ref<HTMLElement | null>(null);
 
 const developingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.developingItems || []);
 const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.testingItems || []);
@@ -105,6 +106,26 @@ function rateStyle(rate: number) {
   return { width: `${Math.max(0, Math.min(100, rate || 0))}%` };
 }
 
+function formatBeijingTime(value?: string) {
+  const text = String(value || '').trim();
+  if (!text) return '-';
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return text;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${partMap.year}-${partMap.month}-${partMap.day} ${partMap.hour}:${partMap.minute}:${partMap.second}`;
+}
+
 function statusType(status: ScheduleItem['status']) {
   return status === 'testing' ? 'warning' : 'primary';
 }
@@ -117,31 +138,43 @@ function segmentStyle(value: number, total: number) {
   return { flexBasis: `${total ? Math.max(4, (value / total) * 100) : 0}%` };
 }
 
-onMounted(load);
+async function mountTopbarActions() {
+  await nextTick();
+  const target = document.getElementById('topbar-actions');
+  const actions = dashboardActionsEl.value;
+  if (!target || !actions) return;
+  if (actions.parentElement !== target) target.replaceChildren(actions);
+}
+
+onMounted(() => {
+  load();
+  mountTopbarActions();
+});
+
+onBeforeUnmount(() => {
+  const target = document.getElementById('topbar-actions');
+  if (target && dashboardActionsEl.value && target.contains(dashboardActionsEl.value)) {
+    target.replaceChildren();
+  }
+});
 </script>
 
 <template>
   <main v-loading="loading" class="content dashboard-page">
-    <div class="dashboard-hero">
-      <div>
-        <p class="eyebrow">项目进行中总览</p>
-        <h1>汇总看板</h1>
-        <span>当前日期：{{ summary?.currentDate || '-' }}</span>
-      </div>
-      <div class="toolbar">
+    <div ref="dashboardActionsEl" class="dashboard-topbar-actions">
+
+
         <el-tag :type="summary?.source === 'feishu' ? 'primary' : 'success'">
           {{ summary?.source === 'feishu' ? '飞书实时数据' : '钉钉实时数据' }}
         </el-tag>
         <el-tag v-if="cacheInfo.updatedAt" :type="cacheInfo.stale ? 'warning' : 'success'">
-          Cache {{ cacheInfo.stale ? 'stale' : 'fresh' }} · {{ cacheInfo.updatedAt }}
+          缓存{{ cacheInfo.stale ? '可能过期' : '正常' }} · 北京时间 {{ formatBeijingTime(cacheInfo.updatedAt) }}
         </el-tag>
         <el-button v-if="user" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
           推送到钉钉
         </el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
-      </div>
     </div>
-
     <section class="compact-kpi-grid">
       <article>
         <span>进行中总数</span>

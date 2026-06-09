@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DataAnalysis, Grid, List, Monitor, SwitchButton, Tools, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { clearToken, getMe, getModules } from '../api';
 import type { ModuleConfig, User } from '../types';
@@ -10,6 +10,8 @@ const router = useRouter();
 const route = useRoute();
 const user = ref<User>();
 const readableModules = ref<ModuleConfig[]>([]);
+const now = ref(new Date());
+let clockTimer: ReturnType<typeof setInterval> | undefined;
 
 const canConfigure = computed(() => user.value?.role === 'admin' || user.value?.role === 'editor');
 const hasProjectModules = computed(() => canConfigure.value || readableModules.value.some((item) => item.category === 'project'));
@@ -23,6 +25,25 @@ const pageTitle = computed(() => {
   if (route.path.startsWith('/settings')) return '系统配置';
   return '汇总看板';
 });
+
+const currentDateText = computed(() => formatBeijingPart(now.value, 'date'));
+const currentTimeText = computed(() => formatBeijingPart(now.value, 'time'));
+
+function formatBeijingPart(value: Date, part: 'date' | 'time') {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(value);
+  const partMap = Object.fromEntries(parts.map((item) => [item.type, item.value]));
+  if (part === 'date') return `${partMap.year}-${partMap.month}-${partMap.day}`;
+  return `${partMap.hour}:${partMap.minute}:${partMap.second}`;
+}
 
 async function boot() {
   try {
@@ -38,7 +59,24 @@ function logout() {
   router.push('/login');
 }
 
-onMounted(boot);
+onMounted(() => {
+  boot();
+  clockTimer = setInterval(() => {
+    now.value = new Date();
+  }, 1000);
+});
+
+onBeforeUnmount(() => {
+  if (clockTimer) clearInterval(clockTimer);
+});
+
+watch(
+  () => route.fullPath,
+  async () => {
+    await nextTick();
+    window.scrollTo({ top: 0, left: 0 });
+  }
+);
 </script>
 
 <template>
@@ -77,6 +115,11 @@ onMounted(boot);
           <p class="eyebrow">{{ user?.dataSourceName || '数据源未选择' }}</p>
           <h2>{{ pageTitle }}</h2>
         </div>
+        <div class="topbar-clock">
+          <span>当前日期：{{ currentDateText }}</span>
+          <span>当前时间：{{ currentTimeText }}</span>
+        </div>
+        <div id="topbar-actions" class="topbar-actions"></div>
         <div class="user-box">
           <span>{{ user?.displayName }}</span>
           <el-tag size="small">{{ user?.role }}</el-tag>

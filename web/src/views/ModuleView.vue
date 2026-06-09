@@ -72,6 +72,26 @@ function matchDateRange(value: unknown, range: string[]) {
   return text >= range[0] && text <= range[1];
 }
 
+function formatBeijingTime(value?: string) {
+  const text = String(value || '').trim();
+  if (!text) return '-';
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return text;
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+  const partMap = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${partMap.year}-${partMap.month}-${partMap.day} ${partMap.hour}:${partMap.minute}:${partMap.second}`;
+}
+
 function clearFilters() {
   keyword.value = '';
   for (const key of Object.keys(filters)) delete filters[key];
@@ -186,7 +206,7 @@ watch(() => route.params.moduleKey, load, { immediate: true });
     <div class="toolbar">
       <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前模块数据" clearable />
       <el-tag v-if="cacheMeta?.updatedAt" :type="cacheMeta.stale ? 'warning' : 'success'">
-        Cache {{ cacheMeta.stale ? 'stale' : 'fresh' }} · {{ cacheMeta.updatedAt }}
+        缓存{{ cacheMeta.stale ? '可能过期' : '正常' }} · 北京时间 {{ formatBeijingTime(cacheMeta.updatedAt) }}
       </el-tag>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">新增</el-button>

@@ -118,6 +118,9 @@ body {
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   height: 64px;
   display: flex;
   align-items: center;
@@ -127,6 +130,11 @@ body {
   background: #fff;
 }
 
+.topbar > div:first-child,
+.user-box {
+  flex-shrink: 0;
+}
+
 .user-box,
 .toolbar {
   display: flex;
@@ -134,8 +142,40 @@ body {
   gap: 10px;
 }
 
+.topbar-clock {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.topbar-actions {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 18px;
+}
+
+.dashboard-topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
 .content {
-  padding: 22px 24px;
+  padding: 16px 24px 22px;
 }
 
 .toolbar {
@@ -177,9 +217,13 @@ body {
   color: #0f172a;
 }
 
+.staff-page .staff-header h2 {
+  display: none;
+}
+
 .staff-header span {
   display: inline-flex;
-  margin-top: 12px;
+  margin-top: 8px;
   color: #475569;
 }
 
@@ -348,10 +392,14 @@ body {
 
 .dashboard-hero {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-end;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
+}
+
+.dashboard-hero > div:first-child {
+  display: none;
 }
 
 .dashboard-hero h1 {
@@ -867,13 +915,27 @@ body {
 }
 
 .settings-page .panel {
-  min-height: calc(100vh - 150px);
+  min-height: calc(100vh - 118px);
+  padding-top: 4px;
+}
+
+.settings-page {
+  position: relative;
+  padding-top: 10px;
+}
+
+.settings-page > .toolbar {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  z-index: 3;
+  margin: 0;
 }
 
 .settings-actions {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .notification-actions {
@@ -1019,6 +1081,17 @@ body {
     gap: 12px;
     padding: 14px 16px;
     flex-direction: column;
+  }
+
+  .topbar-clock {
+    flex-wrap: wrap;
+    line-height: 1.4;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+    margin: 0;
   }
 
   .project-module-header,

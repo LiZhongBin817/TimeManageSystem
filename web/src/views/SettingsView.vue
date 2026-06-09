@@ -110,6 +110,20 @@ const sourceNameById = computed(() => new Map(sources.value.map((item) => [item.
 const staffTemplateOptions = computed(() => sources.value
   .filter((item) => item.id && item.id !== sourceForm.id)
   .map((item) => ({ label: item.name, value: item.id! })));
+const moduleRowsWithLabels = computed(() => {
+  const titleCounts = modules.value.reduce<Record<string, number>>((counts, item) => {
+    const key = `${item.dataSourceId || 'shared'}:${item.category}:${item.title}`;
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+  return modules.value.map((item) => {
+    const key = `${item.dataSourceId || 'shared'}:${item.category}:${item.title}`;
+    return {
+      ...item,
+      displayTitle: titleCounts[key] > 1 ? `${item.title}（${item.key}）` : item.title
+    };
+  });
+});
 const referenceModuleOptions = computed(() => {
   const currentKey = moduleForm.id ? moduleForm.key : '';
   return referenceModules.value
@@ -522,6 +536,18 @@ async function submitModule() {
       ElMessage.error(`模块 key 已存在：${moduleKey}`);
       return;
     }
+    const moduleTitle = String(moduleForm.title || '').trim();
+    const duplicateTitle = modules.value.find((item) =>
+      item.id !== moduleForm.id
+      && item.title === moduleTitle
+      && item.category === moduleForm.category
+      && (item.dataSourceId || undefined) === (moduleForm.dataSourceId || undefined)
+    );
+    if (duplicateTitle) {
+      ElMessage.error(`同一数据源下模块名称已存在：${moduleTitle}`);
+      return;
+    }
+    moduleForm.title = moduleTitle;
     moduleForm.key = moduleKey;
     moduleForm.referenceModuleKey = moduleForm.referenceModuleKey || undefined;
     const saved = await saveConfigModule(moduleForm);
@@ -741,8 +767,8 @@ onMounted(load);
           <div class="settings-actions">
             <el-button type="primary" :icon="Plus" @click="openModuleCreate">新增模块</el-button>
           </div>
-          <el-table :data="modules" stripe>
-            <el-table-column prop="title" label="模块名称" min-width="160" />
+          <el-table :data="moduleRowsWithLabels" stripe>
+            <el-table-column prop="displayTitle" label="模块名称" min-width="200" />
             <el-table-column prop="key" label="模块 key" min-width="150" />
             <el-table-column prop="category" label="分类" width="100" />
             <el-table-column prop="sheetName" label="工作表" min-width="150" />

@@ -219,6 +219,9 @@ export async function findModule(key: string) {
 }
 
 export async function saveModule(input: Partial<ModuleConfig> & { key: string; title: string; sheetName: string }) {
+  const title = input.title.trim();
+  const category = input.category || 'project';
+  const dataSourceId = input.dataSourceId ?? null;
   const duplicate = await get<ModuleRow>(
     input.id
       ? 'SELECT * FROM module_configs WHERE module_key = ? AND id <> ?'
@@ -229,14 +232,24 @@ export async function saveModule(input: Partial<ModuleConfig> & { key: string; t
     throw new Error(`模块 key 已存在：${input.key}`);
   }
 
+  const duplicateTitles = await all<ModuleRow>(
+    input.id
+      ? 'SELECT * FROM module_configs WHERE title = ? AND category = ? AND id <> ?'
+      : 'SELECT * FROM module_configs WHERE title = ? AND category = ?',
+    input.id ? [title, category, input.id] : [title, category]
+  );
+  const duplicateTitle = duplicateTitles.find((row) => (row.data_source_id ?? null) === dataSourceId);
+  if (duplicateTitle) {
+    throw new Error(`同一数据源下模块名称已存在：${title}`);
+  }
   if (input.id) {
     run(
       'UPDATE module_configs SET module_key = ?, title = ?, category = ?, data_source_id = ?, sheet_name = ?, sheet_id = ?, header_row = ?, data_start_row = ?, editable = ?, enabled = ?, sort_order = ?, reference_module_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [
         input.key,
-        input.title,
-        input.category || 'project',
-        input.dataSourceId ?? null,
+        title,
+        category,
+        dataSourceId,
         input.sheetName,
         input.sheetId || null,
         input.headerRow ?? 1,
@@ -253,9 +266,9 @@ export async function saveModule(input: Partial<ModuleConfig> & { key: string; t
       'INSERT INTO module_configs (module_key, title, category, data_source_id, sheet_name, sheet_id, header_row, data_start_row, editable, enabled, sort_order, reference_module_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         input.key,
-        input.title,
-        input.category || 'project',
-        input.dataSourceId ?? null,
+        title,
+        category,
+        dataSourceId,
         input.sheetName,
         input.sheetId || null,
         input.headerRow ?? 1,

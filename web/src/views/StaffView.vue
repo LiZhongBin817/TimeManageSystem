@@ -167,6 +167,7 @@ onMounted(load);
           <strong>{{ roleSummary.developer }}</strong>
         </article>
       </div>
+      <el-button class="staff-refresh-button" :icon="Refresh" @click="load">刷新</el-button>
     </section>
 
     <section class="filter-panel staff-actions">
