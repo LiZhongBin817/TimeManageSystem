@@ -74,6 +74,7 @@ export async function buildDashboardSummary(user: AuthUser) {
     testingVersions: string[];
     developingItems: ScheduleItem[];
     testingItems: ScheduleItem[];
+    cacheMeta?: unknown;
     error?: string;
     editable: boolean;
   }> = [];
@@ -119,18 +120,20 @@ export async function buildDashboardSummary(user: AuthUser) {
   const loadedModules = await Promise.all(projectModules.map(async (module) => {
     try {
       const client = await getClientForModule(module, user);
-      const rows = filterProjectRowsForUser(user, await client.getRows(module));
-      return { module, rows, error: undefined as string | undefined };
+      const sourceRows = await client.getRows(module);
+      const rows = filterProjectRowsForUser(user, sourceRows);
+      return { module, rows, cacheMeta: (sourceRows as any).cacheMeta, error: undefined as string | undefined };
     } catch (failure: any) {
       return {
         module,
         rows: [] as Record<string, unknown>[],
+        cacheMeta: undefined,
         error: failure.response?.data?.message || failure.message || '读取失败'
       };
     }
   }));
 
-  for (const { module, rows, error } of loadedModules) {
+  for (const { module, rows, cacheMeta, error } of loadedModules) {
     const done = rows.filter((row) => isDone(row.isCompleted)).length;
     const unfinishedRows = rows.filter((row) => !isDone(row.isCompleted));
     const testingRows = unfinishedRows.filter((row) => isTesting(row));
@@ -155,6 +158,7 @@ export async function buildDashboardSummary(user: AuthUser) {
       testingVersions: testingRows.map(versionName).filter(Boolean),
       developingItems: developingRows.map((row) => scheduleItem(module, row, 'developing')),
       testingItems: testingRows.map((row) => scheduleItem(module, row, 'testing')),
+      cacheMeta,
       error,
       editable: module.canEdit
     });
@@ -190,6 +194,14 @@ export async function buildDashboardSummary(user: AuthUser) {
         ...(developerRows[name]?.[module.title] || { total: 0, done: 0, unfinished: 0 })
       }))
     })),
+    cache: {
+      updatedAt: moduleStats
+        .map((item: any) => item.cacheMeta?.updatedAt)
+        .filter(Boolean)
+        .sort()[0] || '',
+      stale: moduleStats.some((item: any) => item.cacheMeta?.stale),
+      fallback: moduleStats.some((item: any) => item.cacheMeta?.fallback)
+    },
     trend: moduleStats.map((item) => ({ name: item.title, total: item.total, done: item.done, unfinished: item.unfinished }))
   };
 }

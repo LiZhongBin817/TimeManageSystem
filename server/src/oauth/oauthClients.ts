@@ -15,6 +15,7 @@ interface FetchJsonOptions {
 }
 
 async function fetchJson(url: string, options: FetchJsonOptions = {}) {
+  const startedAt = Date.now();
   try {
     const response = await axios.request({
       url,
@@ -25,11 +26,14 @@ async function fetchJson(url: string, options: FetchJsonOptions = {}) {
       },
       data: options.body,
       timeout: OAUTH_REQUEST_TIMEOUT,
+      adapter: 'fetch',
       httpAgent: oauthHttpAgent,
       httpsAgent: oauthHttpsAgent
     });
+    console.log(`[oauth] ${options.method || 'GET'} ${url} -> ${response.status} in ${Date.now() - startedAt}ms`);
     return { data: response.data };
   } catch (error: any) {
+    console.warn(`[oauth] ${options.method || 'GET'} ${url} failed in ${Date.now() - startedAt}ms: ${error?.code || ''} ${error?.response?.status || ''} ${error?.message || error}`);
     if (error?.code === 'ETIMEDOUT' || error?.code === 'ECONNABORTED' || error?.message?.includes('timeout')) {
       const timeoutError = new Error('请求钉钉/飞书开放平台超时，请稍后重试或检查服务器网络') as Error & {
         code?: string;
@@ -41,6 +45,30 @@ async function fetchJson(url: string, options: FetchJsonOptions = {}) {
     }
     throw error;
   }
+}
+
+function isTransientOAuthError(error: any) {
+  const status = error?.response?.status;
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return [429, 500, 502, 503, 504].includes(status)
+    || ['ETIMEDOUT', 'ECONNABORTED', 'ECONNRESET'].includes(code)
+    || message.includes('timeout')
+    || message.includes('network');
+}
+
+async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = 3) {
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await fetchJson(url, options);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientOAuthError(error) || index === attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 700 * (index + 1)));
+    }
+  }
+  throw oauthError(label, lastError);
 }
 
 export interface OAuthIdentity {
@@ -134,7 +162,7 @@ async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: strin
   const appSecret = requireConfig(dataSource.config.appSecret, '钉钉 AppSecret');
   const baseUrl = dataSource.config.baseUrl || 'https://api.dingtalk.com';
 
-  const tokenResponse = await fetchJson(`${baseUrl}/v1.0/oauth2/userAccessToken`, {
+  const tokenResponse = await fetchJsonWithRetry('DingTalk user token', `${baseUrl}/v1.0/oauth2/userAccessToken`, {
     method: 'POST',
     body: {
       clientId: appKey,
@@ -148,7 +176,7 @@ async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: strin
   const userAccessToken = tokenResponse.data?.accessToken;
   if (!userAccessToken) throw new Error('钉钉用户 accessToken 获取失败');
 
-  const userResponse = await fetchJson(`${baseUrl}/v1.0/contact/users/me`, {
+  const userResponse = await fetchJsonWithRetry('DingTalk current user', `${baseUrl}/v1.0/contact/users/me`, {
     headers: { 'x-acs-dingtalk-access-token': userAccessToken }
   }).catch((error) => {
     throw oauthError('钉钉获取当前用户信息', error);

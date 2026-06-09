@@ -11,7 +11,10 @@ import type {
   NotificationUserSettings,
   PermissionSubjectType,
   PlatformKey,
+  ApiUsageSummary,
+  DingTalkSyncSettings,
   SheetRow,
+  SyncOverview,
   StaffMember,
   StaffMembersResponse,
   User
@@ -71,6 +74,36 @@ export function oauthStartUrl(provider: PlatformKey) {
 
 export async function getLoginConfig() {
   const { data } = await api.get<{ providers: Array<{ key: PlatformKey; label: string }>; localLoginEnabled: boolean }>('/auth/login-config');
+  return data;
+}
+
+export async function getApiUsage(platform: PlatformKey = 'dingtalk') {
+  const { data } = await api.get<{ usage: ApiUsageSummary }>('/admin/api-usage', { params: { platform } });
+  return data.usage;
+}
+
+export async function getSyncOverview(dataSourceId?: number) {
+  const { data } = await api.get<{ overview: SyncOverview }>('/admin/sync-overview', { params: { dataSourceId } });
+  return data.overview;
+}
+
+export async function getDingTalkSyncSettings() {
+  const { data } = await api.get<{ settings: DingTalkSyncSettings }>('/admin/dingtalk-sync/settings');
+  return data.settings;
+}
+
+export async function saveDingTalkSyncSettings(settings: DingTalkSyncSettings) {
+  const { data } = await api.put<{ settings: DingTalkSyncSettings }>('/admin/dingtalk-sync/settings', settings);
+  return data.settings;
+}
+
+export async function refreshApiCache(payload: { platform?: PlatformKey; dataSourceId?: number; moduleKey?: string } = {}) {
+  const { data } = await api.post<{ removed: number }>('/admin/cache/refresh', payload);
+  return data;
+}
+
+export async function syncDingTalkNow(payload: { dataSourceId?: number; moduleKey?: string } = {}) {
+  const { data } = await api.post('/admin/dingtalk-sync', payload);
   return data;
 }
 
@@ -149,12 +182,12 @@ export async function getSummary() {
 }
 
 export async function getRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; cacheMeta?: any; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
   return data;
 }
 
 export async function getProjectRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; cacheMeta?: any; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
   return data;
 }
 

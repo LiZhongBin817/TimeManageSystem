@@ -21,20 +21,28 @@ import {
   copyDataSourceStaffAssignments,
   countDataSourceStaffAssignments,
   getModulePermission,
+  getApiUsageSummary,
+  getDingTalkSyncSettings,
+  getSyncOverview,
+  invalidateSheetCache,
   importStaffOptionsToAssignments,
   listDataSourceStaffMembers,
   listDataSourceStaffOptions,
   listModulePermissions,
   listUsers,
+  logEnterpriseMemberSync,
   replaceDataSourceStaffAssignments,
   replaceModulePermissions,
   run,
+  saveDingTalkSyncSettings,
   upsertEnterpriseMembers,
   updateUser
 } from './db';
 import { getDataSourceClient, moduleDataSourceId } from './dataSources';
 import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontendLoginErrorUrl } from './oauth/oauthClients';
 import { buildDashboardSummary } from './services/dashboardSummary';
+import { syncDingTalkToLocal } from './services/dingtalkSync';
+import { syncEnterpriseMembersForDingTalk } from './services/enterpriseMemberSync';
 import {
   getNotificationSettings,
   getNotificationUserSettings,
@@ -220,14 +228,25 @@ router.get('/data-source/instances', async (req, res, next) => {
   }
 });
 
-router.get('/auth/login-config', (_req, res) => {
-  res.json({
-    providers: [
-      { key: 'dingtalk', label: '钉钉登录' },
-      { key: 'feishu', label: '飞书登录' }
-    ],
-    localLoginEnabled: false
-  });
+router.get('/auth/login-config', async (_req, res, next) => {
+  try {
+    const dataSources = await listDataSources(undefined, false);
+    const seen = new Set<string>();
+    const providers = dataSources
+      .filter((item) => item.config.loginEnabled !== 'false')
+      .filter((item) => {
+        if (seen.has(item.platform)) return false;
+        seen.add(item.platform);
+        return true;
+      })
+      .map((item) => ({ key: item.platform, label: item.platform === 'feishu' ? 'Feishu Login' : 'DingTalk Login' }));
+    const localLoginEnabled = dataSources.some((item) =>
+      item.config.localLoginEnabled === 'true' || process.env.LOCAL_LOGIN_ENABLED === 'true'
+    );
+    res.json({ providers, localLoginEnabled });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.post('/auth/login', async (req, res, next) => {
@@ -240,6 +259,10 @@ router.post('/auth/login', async (req, res, next) => {
     const dataSource = (await listDataSources(parsed.data.platform, false)).find((item) => item.enabled);
     if (!dataSource?.enabled) {
       res.status(403).json({ message: '当前数据源未授权管理员备用登录' });
+      return;
+    }
+    if (dataSource.config.localLoginEnabled !== 'true' && process.env.LOCAL_LOGIN_ENABLED !== 'true') {
+      res.status(403).json({ message: 'Local fallback login is disabled' });
       return;
     }
     const result = await login(parsed.data.username, parsed.data.password, dataSource.id);
@@ -301,6 +324,99 @@ router.get('/auth/oauth/:provider/callback', async (req, res) => {
 });
 
 router.use(requireAuth);
+
+router.get('/admin/api-usage', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can view API usage' });
+      return;
+    }
+    res.json({ usage: await getApiUsageSummary(String(req.query.platform || 'dingtalk')) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/admin/sync-overview', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can view sync status' });
+      return;
+    }
+    res.json({ overview: await getSyncOverview(req.query.dataSourceId ? Number(req.query.dataSourceId) : undefined) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/admin/dingtalk-sync/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can view sync settings' });
+      return;
+    }
+    res.json({ settings: await getDingTalkSyncSettings() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/admin/dingtalk-sync/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can update sync settings' });
+      return;
+    }
+    const parsed = z.object({
+      enabled: z.boolean(),
+      scheduledTime: z.string().regex(/^\d{2}:\d{2}$/),
+      startupSyncEnabled: z.boolean(),
+      startupDelayMs: z.number().int().min(0).max(3600000)
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: 'Invalid DingTalk sync settings' });
+      return;
+    }
+    res.json({ settings: await saveDingTalkSyncSettings(parsed.data) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/admin/cache/refresh', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can refresh cache' });
+      return;
+    }
+    const removed = await invalidateSheetCache({
+      platform: String(req.body?.platform || 'dingtalk'),
+      dataSourceId: req.body?.dataSourceId ? Number(req.body.dataSourceId) : undefined,
+      moduleKey: req.body?.moduleKey ? String(req.body.moduleKey) : undefined
+    });
+    res.json({ removed });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/admin/dingtalk-sync', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can sync DingTalk data' });
+      return;
+    }
+    const dataSourceId = req.body?.dataSourceId ? Number(req.body.dataSourceId) : undefined;
+    const result = await syncDingTalkToLocal({
+      dataSourceId,
+      moduleKey: req.body?.moduleKey ? String(req.body.moduleKey) : undefined
+    });
+    const members = await syncEnterpriseMembersForDingTalk({ dataSourceId });
+    res.json({ ...result, members });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get('/me', (req, res) => {
   res.json({ user: req.user });
@@ -444,9 +560,24 @@ router.post('/enterprise-members/sync', async (req, res, next) => {
       department: member.department,
       raw: member.raw
     })));
+    logEnterpriseMemberSync({
+      provider: req.user!.platform,
+      dataSourceId: req.user!.dataSourceId,
+      status: 'success',
+      total: result.total,
+      created: result.created,
+      updated: result.updated,
+      message: 'manual sync'
+    });
     const users = await listUsers();
     res.json({ ...result, users: users.map(serializeUser) });
   } catch (error) {
+    logEnterpriseMemberSync({
+      provider: req.user!.platform,
+      dataSourceId: req.user!.dataSourceId,
+      status: 'failed',
+      message: error instanceof Error ? error.message : String(error)
+    });
     next(error);
   }
 });
@@ -1016,6 +1147,7 @@ async function getModuleRows(req: any, res: any, next: any) {
       canCreate: decorated.canCreate,
       canUpdate: decorated.canUpdate,
       canDelete: decorated.canDelete,
+      cacheMeta: (rows as any).cacheMeta || null,
       rows
     });
   } catch (error) {

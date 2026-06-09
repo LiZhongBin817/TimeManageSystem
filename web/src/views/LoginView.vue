@@ -3,7 +3,7 @@ import { Connection, Lock, User } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getDataSourceInstances, getDataSourcePlatforms, login, oauthStartUrl } from '../api';
+import { getDataSourceInstances, getDataSourcePlatforms, getLoginConfig, login, oauthStartUrl } from '../api';
 import type { DataSourceInstance, DataSourcePlatform, PlatformKey } from '../types';
 
 type LoginMode = 'oauth' | 'local';
@@ -14,7 +14,8 @@ const loading = ref(false);
 const loadingSources = ref(false);
 const platforms = ref<DataSourcePlatform[]>([]);
 const instances = ref<DataSourceInstance[]>([]);
-const loginMode = ref<LoginMode>('oauth');
+const localLoginEnabled = ref(false);
+const loginMode = ref<LoginMode>('local');
 const form = reactive({
   username: '',
   password: '',
@@ -25,10 +26,9 @@ const activeInstance = computed(() => instances.value.find((item) => item.enable
 const hasDataSource = computed(() => Boolean(activeInstance.value));
 const currentProviderLabel = computed(() => (form.platform === 'feishu' ? '飞书登录' : '钉钉登录'));
 const loginModeOptions = computed(() => {
-  return [
-    { label: currentProviderLabel.value, value: 'oauth' },
-    { label: '账号密码登录', value: 'local' }
-  ];
+  const options = [{ label: currentProviderLabel.value, value: 'oauth' }];
+  if (localLoginEnabled.value) options.push({ label: '账号密码登录', value: 'local' });
+  return options;
 });
 
 async function loadPlatforms() {
@@ -39,7 +39,7 @@ async function loadInstances() {
   loadingSources.value = true;
   try {
     instances.value = await getDataSourceInstances(form.platform);
-    loginMode.value = 'oauth';
+    loginMode.value = localLoginEnabled.value ? 'local' : 'oauth';
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '数据源实例加载失败');
   } finally {
@@ -60,7 +60,7 @@ async function submitLocalLogin() {
     ElMessage.warning('当前平台未配置可用数据源，请先到系统配置中绑定');
     return;
   }
-  if (false) {
+  if (!localLoginEnabled.value) {
     ElMessage.warning('当前平台未授权账号密码登录');
     return;
   }
@@ -89,6 +89,9 @@ onMounted(async () => {
   const oauthError = String(route.query.oauthError || '');
   if (oauthError) ElMessage.error(oauthError);
   try {
+    const config = await getLoginConfig();
+    localLoginEnabled.value = config.localLoginEnabled;
+    loginMode.value = config.localLoginEnabled ? 'local' : 'oauth';
     await loadPlatforms();
     await loadInstances();
   } catch {

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import { AuthUser } from '../auth';
-import { all, get, run } from '../db';
+import { all, get, logApiCall, run } from '../db';
 import { buildDashboardSummary, ScheduleItem } from './dashboardSummary';
 
 export interface NotificationSettings {
@@ -229,10 +229,34 @@ function withKeywords(markdown: string, keywords: string[]) {
 async function sendDingTalkMarkdown(settings: NotificationSettings, title: string, markdown: string) {
   if (!settings.webhookUrl) throw new Error('请先配置钉钉机器人 Webhook');
   const url = signWebhook(settings.webhookUrl, settings.secret);
-  const { data } = await axios.post(url, {
-    msgtype: 'markdown',
-    markdown: { title, text: withKeywords(markdown, settings.keywords) }
-  });
+  const startedAt = Date.now();
+  let data: any;
+  try {
+    const response = await axios.post(url, {
+      msgtype: 'markdown',
+      markdown: { title, text: withKeywords(markdown, settings.keywords) }
+    });
+    data = response.data;
+    logApiCall({
+      platform: 'dingtalk',
+      capability: 'robot.webhook',
+      path: 'robot.webhook',
+      statusCode: response.status,
+      durationMs: Date.now() - startedAt,
+      success: !data?.errcode
+    });
+  } catch (error: any) {
+    logApiCall({
+      platform: 'dingtalk',
+      capability: 'robot.webhook',
+      path: 'robot.webhook',
+      statusCode: error?.response?.status,
+      durationMs: Date.now() - startedAt,
+      success: false,
+      errorCode: String(error?.response?.data?.errcode || error?.code || error?.message || 'unknown').slice(0, 120)
+    });
+    throw error;
+  }
   if (data?.errcode && data.errcode !== 0) {
     throw new Error(data.errmsg || `钉钉机器人返回错误：${data.errcode}`);
   }

@@ -11,7 +11,7 @@ export async function getDataSourceClient(dataSourceId?: number, user?: AuthUser
 }
 
 export function createClient(dataSource: DataSourceInstance) {
-  if (dataSource.platform === 'dingtalk') return new DingTalkSheetClient(dataSource.config);
+  if (dataSource.platform === 'dingtalk') return new DingTalkSheetClient({ ...dataSource.config, dataSourceId: dataSource.id });
   if (dataSource.platform === 'feishu') return new FeishuSheetClient(dataSource.config);
   throw new Error(`暂不支持的数据源平台：${dataSource.platform}`);
 }

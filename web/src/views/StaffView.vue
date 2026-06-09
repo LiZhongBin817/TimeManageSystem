@@ -191,7 +191,7 @@ onMounted(load);
     />
 
     <section class="panel">
-      <el-table :data="members" height="calc(100vh - 330px)" stripe>
+      <el-table :data="members" height="calc(100vh - 390px)" stripe>
         <el-table-column label="显示名称" min-width="180">
           <template #default="{ row }">
             <el-input v-if="isAdmin && row.source === 'manual'" v-model="row.displayName" placeholder="外部人员姓名" />

@@ -42,6 +42,7 @@ const developingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress
 const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.testingItems || []);
 const inProgressTotal = computed(() => developingItems.value.length + testingItems.value.length);
 const totalModules = computed(() => summary.value?.moduleStats?.length || 0);
+const cacheInfo = computed(() => summary.value?.cache || {});
 
 const developerStats = computed(() => {
   const moduleStats = summary.value?.moduleStats || [];
@@ -130,6 +131,9 @@ onMounted(load);
       <div class="toolbar">
         <el-tag :type="summary?.source === 'feishu' ? 'primary' : 'success'">
           {{ summary?.source === 'feishu' ? '飞书实时数据' : '钉钉实时数据' }}
+        </el-tag>
+        <el-tag v-if="cacheInfo.updatedAt" :type="cacheInfo.stale ? 'warning' : 'success'">
+          Cache {{ cacheInfo.stale ? 'stale' : 'fresh' }} · {{ cacheInfo.updatedAt }}
         </el-tag>
         <el-button v-if="user" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
           推送到钉钉

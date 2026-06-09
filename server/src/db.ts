@@ -93,6 +93,38 @@ export interface StaffMemberRecord {
   sortOrder: number;
 }
 
+export interface LocalModuleRow {
+  id: string;
+  rowNumber?: number;
+  syncStatus?: string;
+  syncAction?: 'upsert' | 'delete';
+  syncError?: string;
+  updatedAt?: string;
+  syncedAt?: string;
+  [key: string]: string | number | undefined;
+}
+
+export interface ApiUsageSummary {
+  todayCalls: number;
+  monthCalls: number;
+  todayFailures: number;
+  monthFailures: number;
+  todayTimeouts: number;
+  monthTimeouts: number;
+  todayCacheHits: number;
+  monthCacheHits: number;
+  cacheHitRate: number;
+  monthlyWarnLimit: number;
+  warnLevel: 'ok' | 'warning' | 'danger';
+}
+
+export interface DingTalkSyncSettings {
+  enabled: boolean;
+  scheduledTime: string;
+  startupSyncEnabled: boolean;
+  startupDelayMs: number;
+}
+
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.resolve(__dirname, '..', 'server-data.db');
@@ -338,6 +370,92 @@ export async function initDatabase() {
       scheduled_time TEXT NOT NULL DEFAULT '09:00',
       last_scheduled_date TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS sheet_cache (
+      cache_key TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      data_source_id INTEGER,
+      module_key TEXT,
+      payload_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS api_call_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      path TEXT NOT NULL,
+      status_code INTEGER,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      cache_hit INTEGER NOT NULL DEFAULT 0,
+      success INTEGER NOT NULL DEFAULT 1,
+      error_code TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS module_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      data_source_id INTEGER NOT NULL,
+      module_key TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      row_number INTEGER,
+      payload_json TEXT NOT NULL,
+      sync_status TEXT NOT NULL DEFAULT 'synced',
+      sync_action TEXT NOT NULL DEFAULT 'upsert',
+      sync_error TEXT,
+      synced_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(data_source_id, module_key, row_id)
+    )
+  `);
+  await ensureColumn('module_rows', 'sync_status', "TEXT NOT NULL DEFAULT 'synced'");
+  await ensureColumn('module_rows', 'sync_action', "TEXT NOT NULL DEFAULT 'upsert'");
+  await ensureColumn('module_rows', 'sync_error', 'TEXT');
+  await ensureColumn('module_rows', 'synced_at', 'TEXT');
+
+  run(`
+    CREATE TABLE IF NOT EXISTS sync_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform TEXT NOT NULL,
+      data_source_id INTEGER,
+      module_key TEXT,
+      direction TEXT NOT NULL,
+      status TEXT NOT NULL,
+      total_rows INTEGER NOT NULL DEFAULT 0,
+      message TEXT,
+      started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      finished_at TEXT
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS enterprise_member_sync_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      data_source_id INTEGER,
+      status TEXT NOT NULL,
+      total INTEGER NOT NULL DEFAULT 0,
+      created INTEGER NOT NULL DEFAULT 0,
+      updated INTEGER NOT NULL DEFAULT 0,
+      message TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -952,4 +1070,387 @@ export async function addAuditLog(input: {
     input.rowId ?? null,
     input.payload ? JSON.stringify(input.payload) : null
   ]);
+}
+
+export async function getSheetCache<T>(cacheKey: string) {
+  const row = await get<{ payload_json: string; updated_at: string }>('SELECT payload_json, updated_at FROM sheet_cache WHERE cache_key = ?', [cacheKey]);
+  if (!row) return undefined;
+  try {
+    return {
+      payload: JSON.parse(row.payload_json) as T,
+      updatedAt: row.updated_at
+    };
+  } catch {
+    run('DELETE FROM sheet_cache WHERE cache_key = ?', [cacheKey]);
+    return undefined;
+  }
+}
+
+export function setSheetCache(input: { cacheKey: string; platform: string; dataSourceId?: number; moduleKey?: string; payload: unknown }) {
+  run(
+    `INSERT INTO sheet_cache (cache_key, platform, data_source_id, module_key, payload_json, updated_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(cache_key) DO UPDATE SET
+       platform = excluded.platform,
+       data_source_id = excluded.data_source_id,
+       module_key = excluded.module_key,
+       payload_json = excluded.payload_json,
+       updated_at = CURRENT_TIMESTAMP`,
+    [
+      input.cacheKey,
+      input.platform,
+      input.dataSourceId ?? null,
+      input.moduleKey || null,
+      JSON.stringify(input.payload)
+    ]
+  );
+}
+
+export async function invalidateSheetCache(input: { platform?: string; dataSourceId?: number; moduleKey?: string } = {}) {
+  const clauses = [
+    input.platform ? 'platform = ?' : '',
+    input.dataSourceId ? 'data_source_id = ?' : '',
+    input.moduleKey ? 'module_key = ?' : ''
+  ].filter(Boolean);
+  const params = [
+    ...(input.platform ? [input.platform] : []),
+    ...(input.dataSourceId ? [input.dataSourceId] : []),
+    ...(input.moduleKey ? [input.moduleKey] : [])
+  ];
+  const count = await get<{ total: number }>(`SELECT COUNT(*) as total FROM sheet_cache${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''}`, params);
+  run(`DELETE FROM sheet_cache${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''}`, params);
+  return count?.total || 0;
+}
+
+export function logApiCall(input: {
+  platform: string;
+  capability: string;
+  path: string;
+  statusCode?: number;
+  durationMs?: number;
+  cacheHit?: boolean;
+  success?: boolean;
+  errorCode?: string;
+}) {
+  run(
+    `INSERT INTO api_call_logs (platform, capability, path, status_code, duration_ms, cache_hit, success, error_code)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.platform,
+      input.capability,
+      input.path,
+      input.statusCode ?? null,
+      Math.max(0, Math.round(input.durationMs || 0)),
+      input.cacheHit ? 1 : 0,
+      input.success === false ? 0 : 1,
+      input.errorCode || null
+    ]
+  );
+}
+
+async function scalarCount(sql: string, params: unknown[] = []) {
+  return (await get<{ total: number }>(sql, params))?.total || 0;
+}
+
+export async function getApiUsageSummary(platform = 'dingtalk'): Promise<ApiUsageSummary> {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const month = now.toISOString().slice(0, 7);
+  const monthlyWarnLimit = Number(process.env.DINGTALK_API_MONTHLY_WARN_LIMIT || 7000);
+  const [todayCalls, monthCalls, todayFailures, monthFailures, todayTimeouts, monthTimeouts, todayCacheHits, monthCacheHits] = await Promise.all([
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 0 AND date(created_at) = date(?)", [platform, today]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 0 AND substr(created_at, 1, 7) = ?", [platform, month]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND success = 0 AND date(created_at) = date(?)", [platform, today]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND success = 0 AND substr(created_at, 1, 7) = ?", [platform, month]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND success = 0 AND error_code LIKE '%timeout%' AND date(created_at) = date(?)", [platform, today]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND success = 0 AND error_code LIKE '%timeout%' AND substr(created_at, 1, 7) = ?", [platform, month]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 1 AND date(created_at) = date(?)", [platform, today]),
+    scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 1 AND substr(created_at, 1, 7) = ?", [platform, month])
+  ]);
+  const totalReads = monthCalls + monthCacheHits;
+  const cacheHitRate = totalReads ? Math.round((monthCacheHits / totalReads) * 100) : 0;
+  const warnLevel = monthCalls >= monthlyWarnLimit * 0.9 ? 'danger' : monthCalls >= monthlyWarnLimit * 0.7 ? 'warning' : 'ok';
+  return {
+    todayCalls,
+    monthCalls,
+    todayFailures,
+    monthFailures,
+    todayTimeouts,
+    monthTimeouts,
+    todayCacheHits,
+    monthCacheHits,
+    cacheHitRate,
+    monthlyWarnLimit,
+    warnLevel
+  };
+}
+
+function normalizeLocalRow(row: any): LocalModuleRow | undefined {
+  if (!row) return undefined;
+  try {
+    const payload = JSON.parse(row.payload_json || '{}');
+    return {
+      ...payload,
+      id: String(row.row_id),
+      rowNumber: row.row_number ? Number(row.row_number) : payload.rowNumber,
+      syncStatus: row.sync_status,
+      syncAction: row.sync_action || 'upsert',
+      syncError: row.sync_error || undefined,
+      syncedAt: row.synced_at || undefined,
+      updatedAt: row.updated_at || undefined
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function listLocalModuleRows(dataSourceId: number | undefined, moduleKey: string): Promise<LocalModuleRow[]> {
+  if (!dataSourceId) return [];
+  const rows = await all<any>(
+    `SELECT * FROM module_rows
+     WHERE data_source_id = ? AND module_key = ?
+       AND COALESCE(sync_action, 'upsert') <> 'delete'
+     ORDER BY COALESCE(row_number, id), id`,
+    [dataSourceId, moduleKey]
+  );
+  return rows.map(normalizeLocalRow).filter(Boolean) as LocalModuleRow[];
+}
+
+export async function getLocalModuleRow(dataSourceId: number | undefined, moduleKey: string, rowId: string) {
+  if (!dataSourceId) return undefined;
+  const row = await get<any>(
+    `SELECT * FROM module_rows
+     WHERE data_source_id = ? AND module_key = ? AND (row_id = ? OR row_number = ?)
+     ORDER BY id LIMIT 1`,
+    [dataSourceId, moduleKey, rowId, Number(rowId) || -1]
+  );
+  return normalizeLocalRow(row);
+}
+
+export function upsertLocalModuleRow(input: {
+  platform: string;
+  dataSourceId: number;
+  moduleKey: string;
+  row: Record<string, unknown>;
+  syncStatus?: string;
+  syncAction?: 'upsert' | 'delete';
+  syncError?: string;
+  syncedAt?: string;
+}) {
+  const rowId = String(input.row.id || input.row.rowNumber || `local-${Date.now()}`);
+  const rowNumber = Number(input.row.rowNumber || rowId);
+  run(
+    `INSERT INTO module_rows (platform, data_source_id, module_key, row_id, row_number, payload_json, sync_status, sync_action, sync_error, synced_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(data_source_id, module_key, row_id) DO UPDATE SET
+       row_number = excluded.row_number,
+       payload_json = excluded.payload_json,
+       sync_status = excluded.sync_status,
+       sync_action = excluded.sync_action,
+       sync_error = excluded.sync_error,
+       synced_at = excluded.synced_at,
+       updated_at = CURRENT_TIMESTAMP`,
+    [
+      input.platform,
+      input.dataSourceId,
+      input.moduleKey,
+      rowId,
+      Number.isFinite(rowNumber) ? rowNumber : null,
+      JSON.stringify({ ...input.row, id: rowId }),
+      input.syncStatus || 'pending',
+      input.syncAction || 'upsert',
+      input.syncError || null,
+      input.syncedAt || null
+    ]
+  );
+}
+
+export async function listPendingLocalModuleRows(dataSourceId: number | undefined, moduleKey: string): Promise<LocalModuleRow[]> {
+  if (!dataSourceId) return [];
+  const rows = await all<any>(
+    `SELECT * FROM module_rows
+     WHERE data_source_id = ? AND module_key = ?
+       AND sync_status IN ('pending', 'failed')
+     ORDER BY updated_at, COALESCE(row_number, id), id`,
+    [dataSourceId, moduleKey]
+  );
+  return rows.map(normalizeLocalRow).filter(Boolean) as LocalModuleRow[];
+}
+
+export async function replaceLocalModuleRows(input: {
+  platform: string;
+  dataSourceId: number;
+  moduleKey: string;
+  rows: Record<string, unknown>[];
+}) {
+  await withPersistenceBatch(() => {
+    run('DELETE FROM module_rows WHERE data_source_id = ? AND module_key = ?', [input.dataSourceId, input.moduleKey]);
+    input.rows.forEach((row) => {
+      upsertLocalModuleRow({
+        platform: input.platform,
+        dataSourceId: input.dataSourceId,
+        moduleKey: input.moduleKey,
+        row,
+        syncStatus: 'synced',
+        syncedAt: new Date().toISOString()
+      });
+    });
+  });
+}
+
+export function deleteLocalModuleRow(dataSourceId: number | undefined, moduleKey: string, rowId: string) {
+  if (!dataSourceId) return;
+  run('DELETE FROM module_rows WHERE data_source_id = ? AND module_key = ? AND (row_id = ? OR row_number = ?)', [
+    dataSourceId,
+    moduleKey,
+    rowId,
+    Number(rowId) || -1
+  ]);
+}
+
+export function markLocalModuleRowSync(input: {
+  dataSourceId: number;
+  moduleKey: string;
+  rowId: string;
+  status: 'synced' | 'pending' | 'failed';
+  error?: string;
+}) {
+  run(
+    `UPDATE module_rows
+     SET sync_status = ?, sync_error = ?, synced_at = CASE WHEN ? = 'synced' THEN CURRENT_TIMESTAMP ELSE synced_at END, updated_at = CURRENT_TIMESTAMP
+     WHERE data_source_id = ? AND module_key = ? AND (row_id = ? OR row_number = ?)`,
+    [
+      input.status,
+      input.error || null,
+      input.status,
+      input.dataSourceId,
+      input.moduleKey,
+      input.rowId,
+      Number(input.rowId) || -1
+    ]
+  );
+}
+
+export async function createSyncJob(input: { platform: string; dataSourceId?: number; moduleKey?: string; direction: string }) {
+  run(
+    'INSERT INTO sync_jobs (platform, data_source_id, module_key, direction, status) VALUES (?, ?, ?, ?, ?)',
+    [input.platform, input.dataSourceId ?? null, input.moduleKey || null, input.direction, 'running']
+  );
+  return (await get<{ id: number }>('SELECT last_insert_rowid() as id'))?.id || 0;
+}
+
+export function finishSyncJob(input: { id: number; status: 'success' | 'failed'; totalRows?: number; message?: string }) {
+  run(
+    'UPDATE sync_jobs SET status = ?, total_rows = ?, message = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?',
+    [input.status, input.totalRows || 0, input.message || '', input.id]
+  );
+}
+
+export function logEnterpriseMemberSync(input: {
+  provider: string;
+  dataSourceId?: number;
+  status: 'success' | 'failed';
+  total?: number;
+  created?: number;
+  updated?: number;
+  message?: string;
+}) {
+  run(
+    `INSERT INTO enterprise_member_sync_logs (provider, data_source_id, status, total, created, updated, message)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      input.provider,
+      input.dataSourceId ?? null,
+      input.status,
+      input.total || 0,
+      input.created || 0,
+      input.updated || 0,
+      input.message || ''
+    ]
+  );
+}
+
+export async function getSyncOverview(dataSourceId?: number) {
+  const params = dataSourceId ? [dataSourceId] : [];
+  const dataSourceClause = dataSourceId ? 'WHERE data_source_id = ?' : '';
+  const rowStats = await get<{ total: number; pending: number; failed: number; synced: number }>(
+    `SELECT
+       COUNT(*) as total,
+       SUM(CASE WHEN sync_status = 'pending' THEN 1 ELSE 0 END) as pending,
+       SUM(CASE WHEN sync_status = 'failed' THEN 1 ELSE 0 END) as failed,
+       SUM(CASE WHEN sync_status = 'synced' THEN 1 ELSE 0 END) as synced
+     FROM module_rows ${dataSourceClause}`,
+    params
+  );
+  const jobs = await all<any>(
+    `SELECT * FROM sync_jobs
+     ${dataSourceClause}
+     ORDER BY id DESC
+     LIMIT 20`,
+    params
+  );
+  const memberLogs = await all<any>(
+    `SELECT * FROM enterprise_member_sync_logs
+     ${dataSourceClause}
+     ORDER BY id DESC
+     LIMIT 20`,
+    params
+  );
+  return {
+    rows: {
+      total: rowStats?.total || 0,
+      pending: rowStats?.pending || 0,
+      failed: rowStats?.failed || 0,
+      synced: rowStats?.synced || 0
+    },
+    jobs,
+    memberLogs
+  };
+}
+
+function boolSetting(value: string | undefined, fallback: boolean) {
+  if (value === undefined || value === '') return fallback;
+  return value === 'true';
+}
+
+function normalizeTimeSetting(value: string | undefined, fallback = '02:00') {
+  const text = String(value || fallback).trim();
+  return /^\d{2}:\d{2}$/.test(text) ? text : fallback;
+}
+
+export async function getDingTalkSyncSettings(): Promise<DingTalkSyncSettings> {
+  const rows = await all<{ key: string; value: string }>("SELECT key, value FROM system_settings WHERE key LIKE 'dingtalk.sync.%'");
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  return {
+    enabled: boolSetting(values.get('dingtalk.sync.enabled'), process.env.DINGTALK_SYNC_ENABLED !== 'false'),
+    scheduledTime: normalizeTimeSetting(values.get('dingtalk.sync.scheduledTime'), process.env.DINGTALK_SYNC_TIME || '02:00'),
+    startupSyncEnabled: boolSetting(values.get('dingtalk.sync.startupSyncEnabled'), process.env.DINGTALK_SYNC_STARTUP_ENABLED !== 'false'),
+    startupDelayMs: Number(values.get('dingtalk.sync.startupDelayMs') || process.env.DINGTALK_SYNC_STARTUP_DELAY_MS || 15000)
+  };
+}
+
+export async function saveDingTalkSyncSettings(input: Partial<DingTalkSyncSettings>) {
+  const current = await getDingTalkSyncSettings();
+  const next: DingTalkSyncSettings = {
+    enabled: input.enabled ?? current.enabled,
+    scheduledTime: normalizeTimeSetting(input.scheduledTime, current.scheduledTime),
+    startupSyncEnabled: input.startupSyncEnabled ?? current.startupSyncEnabled,
+    startupDelayMs: Math.max(0, Number(input.startupDelayMs ?? current.startupDelayMs) || 0)
+  };
+  await withPersistenceBatch(() => {
+    Object.entries({
+      'dingtalk.sync.enabled': String(next.enabled),
+      'dingtalk.sync.scheduledTime': next.scheduledTime,
+      'dingtalk.sync.startupSyncEnabled': String(next.startupSyncEnabled),
+      'dingtalk.sync.startupDelayMs': String(next.startupDelayMs)
+    }).forEach(([key, value]) => {
+      run(
+        `INSERT INTO system_settings (key, value, updated_at)
+         VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+        [key, value]
+      );
+    });
+  });
+  return next;
 }

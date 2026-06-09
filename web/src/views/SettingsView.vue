@@ -6,6 +6,7 @@ import {
   deleteConfigModule,
   deleteDataSourceInstance,
   getConfigModules,
+  getApiUsage,
   getDataSourceInstances,
   getMe,
   getNotificationLogs,
@@ -13,22 +14,29 @@ import {
   getNotificationUserSettings,
   getPermissions,
   getReferenceModules,
+  getSyncOverview,
+  getDingTalkSyncSettings,
   getUsers,
   initializeStaffAssignments,
   pushDashboardNotification,
+  refreshApiCache,
   saveConfigModule,
+  saveDingTalkSyncSettings,
   saveDataSourceInstance,
   saveModuleFields,
   saveNotificationSettings,
   saveNotificationUserSettings,
   savePermissions,
   sendNotificationTest,
+  syncDingTalkNow,
   syncEnterpriseMembers,
   syncConfigModule,
   updateManagedUser
 } from '../api';
 import type {
+  ApiUsageSummary,
   DataSourceInstance,
+  DingTalkSyncSettings,
   FieldType,
   ManagedUser,
   ModuleConfig,
@@ -39,6 +47,7 @@ import type {
   NotificationUserSettings,
   PermissionSubjectType,
   Role,
+  SyncOverview,
   User
 } from '../types';
 
@@ -49,6 +58,11 @@ const referenceModules = ref<ModuleConfig[]>([]);
 const users = ref<ManagedUser[]>([]);
 const permissions = ref<ModulePermission[]>([]);
 const notificationLogs = ref<NotificationLog[]>([]);
+const apiUsage = ref<ApiUsageSummary | null>(null);
+const syncOverview = ref<SyncOverview | null>(null);
+const cacheRefreshing = ref(false);
+const dingTalkSyncing = ref(false);
+const syncSettingsSaving = ref(false);
 const me = ref<User>();
 const activeTab = ref('sources');
 const permissionSubjectType = ref<PermissionSubjectType>('user');
@@ -82,6 +96,12 @@ const notificationUserForm = reactive<NotificationUserSettings>({
   enabled: false,
   scheduledTime: '09:00',
   lastScheduledDate: ''
+});
+const dingTalkSyncForm = reactive<DingTalkSyncSettings>({
+  enabled: true,
+  scheduledTime: '02:00',
+  startupSyncEnabled: true,
+  startupDelayMs: 15000
 });
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
@@ -189,6 +209,9 @@ async function load() {
     if (canUseNotification.value) await loadNotificationConfig();
     if (me.value.role === 'admin') {
       users.value = await getUsers();
+      apiUsage.value = await getApiUsage('dingtalk');
+      syncOverview.value = await getSyncOverview();
+      Object.assign(dingTalkSyncForm, await getDingTalkSyncSettings());
       if (!permissionSubjectId.value) permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : 'admin';
       await loadPermissions();
     }
@@ -196,6 +219,60 @@ async function load() {
     ElMessage.error(error.response?.data?.message || '配置加载失败');
   } finally {
     loading.value = false;
+  }
+}
+
+async function submitDingTalkSyncSettings() {
+  syncSettingsSaving.value = true;
+  try {
+    Object.assign(dingTalkSyncForm, await saveDingTalkSyncSettings({
+      ...dingTalkSyncForm,
+      startupDelayMs: Number(dingTalkSyncForm.startupDelayMs) || 0
+    }));
+    ElMessage.success('钉钉同步设置已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '同步设置保存失败');
+  } finally {
+    syncSettingsSaving.value = false;
+  }
+}
+
+async function refreshUsage() {
+  if (!isAdmin.value) return;
+  const [usage, overview] = await Promise.all([
+    getApiUsage('dingtalk'),
+    getSyncOverview()
+  ]);
+  apiUsage.value = usage;
+  syncOverview.value = overview;
+}
+
+async function clearDingTalkCache() {
+  cacheRefreshing.value = true;
+  try {
+    const result = await refreshApiCache({ platform: 'dingtalk' });
+    ElMessage.success(`钉钉缓存已清理：${result.removed} 条`);
+    await refreshUsage();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '缓存清理失败');
+  } finally {
+    cacheRefreshing.value = false;
+  }
+}
+
+async function syncDingTalkData() {
+  dingTalkSyncing.value = true;
+  try {
+    const result = await syncDingTalkNow();
+    const memberText = result.members
+      ? `，企业成员 ${result.members.totalMembers || 0} 人（新增 ${result.members.created || 0}，更新 ${result.members.updated || 0}）`
+      : '';
+    ElMessage.success(`钉钉同步完成：表格 ${result.success}/${result.total}${memberText}`);
+    await refreshUsage();
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '钉钉同步失败');
+  } finally {
+    dingTalkSyncing.value = false;
   }
 }
 
@@ -517,6 +594,106 @@ onMounted(load);
               </template>
             </el-table-column>
           </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="isAdmin" label="接口与同步" name="api-usage">
+          <div class="settings-actions">
+            <el-button :icon="Refresh" @click="refreshUsage">刷新统计</el-button>
+            <el-button type="warning" :loading="cacheRefreshing" @click="clearDingTalkCache">清理钉钉缓存</el-button>
+            <el-button type="primary" :loading="dingTalkSyncing" @click="syncDingTalkData">立即同步钉钉</el-button>
+          </div>
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>钉钉定时同步</h2>
+              <span>配置从钉钉定时拉取表格数据，并同步企业成员到本地用户。</span>
+            </div>
+            <el-form label-position="top" class="sync-settings-form">
+              <div class="sync-settings-grid">
+                <el-form-item label="启用定时同步">
+                  <el-switch v-model="dingTalkSyncForm.enabled" />
+                </el-form-item>
+                <el-form-item label="每日同步时间">
+                  <el-time-picker
+                    v-model="dingTalkSyncForm.scheduledTime"
+                    class="full-field"
+                    format="HH:mm"
+                    value-format="HH:mm"
+                    :disabled="!dingTalkSyncForm.enabled"
+                  />
+                </el-form-item>
+                <el-form-item label="启动后自动同步">
+                  <el-switch v-model="dingTalkSyncForm.startupSyncEnabled" />
+                </el-form-item>
+                <el-form-item label="启动延迟（毫秒）">
+                  <el-input-number v-model="dingTalkSyncForm.startupDelayMs" class="full-field" :min="0" :max="3600000" :step="1000" />
+                </el-form-item>
+              </div>
+              <el-button type="primary" :loading="syncSettingsSaving" @click="submitDingTalkSyncSettings">保存同步设置</el-button>
+            </el-form>
+          </section>
+          <section class="compact-kpi-grid">
+            <article>
+              <span>今日调用</span>
+              <strong>{{ apiUsage?.todayCalls || 0 }}</strong>
+              <small>缓存命中 {{ apiUsage?.todayCacheHits || 0 }}</small>
+            </article>
+            <article>
+              <span>本月调用</span>
+              <strong>{{ apiUsage?.monthCalls || 0 }}</strong>
+              <small>预警阈值 {{ apiUsage?.monthlyWarnLimit || 0 }}</small>
+            </article>
+            <article>
+              <span>失败次数</span>
+              <strong>{{ apiUsage?.monthFailures || 0 }}</strong>
+              <small>超时 {{ apiUsage?.monthTimeouts || 0 }}</small>
+            </article>
+            <article>
+              <span>缓存命中率</span>
+              <strong>{{ apiUsage?.cacheHitRate || 0 }}%</strong>
+              <small>状态 {{ apiUsage?.warnLevel || '正常' }}</small>
+            </article>
+          </section>
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>本地数据同步</h2>
+              <span>查看本地数据是否已经推送到钉钉。</span>
+            </div>
+            <section class="compact-kpi-grid">
+              <article><span>本地行数</span><strong>{{ syncOverview?.rows.total || 0 }}</strong><small>全部模块</small></article>
+              <article><span>已同步</span><strong>{{ syncOverview?.rows.synced || 0 }}</strong><small>已写入钉钉</small></article>
+              <article><span>待同步</span><strong>{{ syncOverview?.rows.pending || 0 }}</strong><small>等待推送</small></article>
+              <article><span>失败</span><strong>{{ syncOverview?.rows.failed || 0 }}</strong><small>需要重试或检查</small></article>
+            </section>
+          </section>
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>钉钉拉取任务</h2>
+              <span>最近从钉钉拉取到本地数据库的定时或手动同步记录。</span>
+            </div>
+            <el-table :data="syncOverview?.jobs || []" stripe>
+              <el-table-column prop="started_at" label="开始时间" min-width="170" />
+              <el-table-column prop="module_key" label="模块" min-width="150" />
+              <el-table-column prop="direction" label="方向" width="100" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="total_rows" label="行数" width="90" />
+              <el-table-column prop="message" label="说明" min-width="220" />
+            </el-table>
+          </section>
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>企业成员同步</h2>
+              <span>查看钉钉用户数据是否已经同步到本地用户。</span>
+            </div>
+            <el-table :data="syncOverview?.memberLogs || []" stripe>
+              <el-table-column prop="created_at" label="时间" min-width="170" />
+              <el-table-column prop="provider" label="平台" width="110" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="total" label="总数" width="90" />
+              <el-table-column prop="created" label="新增" width="90" />
+              <el-table-column prop="updated" label="更新" width="90" />
+              <el-table-column prop="message" label="说明" min-width="220" />
+            </el-table>
+          </section>
         </el-tab-pane>
 
         <el-tab-pane label="模块配置" name="modules">

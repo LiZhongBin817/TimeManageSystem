@@ -3,12 +3,26 @@ import http from 'http';
 import https from 'https';
 import { ModuleConfig, findModule, getDataSource } from '../config/modules';
 import { SheetRow, mockRows } from '../data/mockRows';
+import {
+  deleteLocalModuleRow,
+  getLocalModuleRow,
+  getSheetCache,
+  invalidateSheetCache,
+  listLocalModuleRows,
+  listPendingLocalModuleRows,
+  logApiCall,
+  markLocalModuleRowSync,
+  replaceLocalModuleRows,
+  setSheetCache,
+  upsertLocalModuleRow
+} from '../db';
 
 interface DingTalkConfig {
   appKey?: string;
   appSecret?: string;
   workbookId?: string;
   operatorId?: string;
+  dataSourceId?: string | number;
   baseUrl: string;
 }
 
@@ -29,9 +43,13 @@ const WORKSHEET_CACHE_TTL = 5 * 60 * 1000;
 const ROW_READ_CHUNK_SIZE = Number(process.env.DINGTALK_ROW_READ_CHUNK_SIZE || 150);
 const ROW_READ_MAX_ROW = Number(process.env.DINGTALK_ROW_READ_MAX_ROW || 2000);
 const ROW_READ_TAIL_WINDOW = Number(process.env.DINGTALK_ROW_READ_TAIL_WINDOW || 20);
+const CACHE_TTL_SECONDS = Number(process.env.DINGTALK_CACHE_TTL_SECONDS || 180);
+const CACHE_STALE_SECONDS = Number(process.env.DINGTALK_CACHE_STALE_SECONDS || 86400);
+const LOCAL_FIRST = process.env.DINGTALK_LOCAL_FIRST !== 'false';
 const dingTalkHttpAgent = new http.Agent({ family: 4 });
 const dingTalkHttpsAgent = new https.Agent({ family: 4 });
 const dingTalkAxiosOptions = { httpAgent: dingTalkHttpAgent, httpsAgent: dingTalkHttpsAgent };
+const rowRefreshes = new Map<string, Promise<SheetRow[]>>();
 
 interface EnterpriseMember {
   providerUserId: string;
@@ -43,6 +61,29 @@ interface EnterpriseMember {
   email?: string;
   department?: string;
   raw?: unknown;
+}
+
+interface RowsCachePayload {
+  rows: SheetRow[];
+}
+
+function annotateRows(rows: SheetRow[], meta: Record<string, unknown>) {
+  Object.defineProperty(rows, 'cacheMeta', {
+    value: meta,
+    enumerable: false,
+    configurable: true
+  });
+  return rows;
+}
+
+function cacheAgeSeconds(updatedAt: string) {
+  const normalized = updatedAt.includes('T') ? updatedAt : `${updatedAt.replace(' ', 'T')}Z`;
+  const time = new Date(normalized).getTime();
+  return Number.isFinite(time) ? Math.max(0, Math.floor((Date.now() - time) / 1000)) : Number.MAX_SAFE_INTEGER;
+}
+
+function errorCode(error: any) {
+  return String(error?.response?.data?.code || error?.response?.status || error?.code || error?.message || 'unknown').slice(0, 120);
 }
 
 function columnName(index: number) {
@@ -143,6 +184,7 @@ export class DingTalkSheetClient {
       appSecret: config?.appSecret ?? process.env.DINGTALK_APP_SECRET,
       workbookId: config?.workbookId ?? process.env.DINGTALK_WORKBOOK_ID,
       operatorId: config?.operatorId ?? process.env.DINGTALK_OPERATOR_ID,
+      dataSourceId: config?.dataSourceId,
       baseUrl: config?.baseUrl ?? process.env.DINGTALK_API_BASE_URL ?? 'https://api.dingtalk.com'
     };
   }
@@ -163,10 +205,12 @@ export class DingTalkSheetClient {
     for (const deptId of deptIds) {
       let cursor = 0;
       while (true) {
-        const response = await axios.post(
-          'https://oapi.dingtalk.com/topapi/v2/user/list',
-          { dept_id: Number(deptId), cursor, size: 100, contain_access_limit: false, language: 'zh_CN' },
-          { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
+        const response = await this.trackedAxios('contact.user.list', () =>
+          axios.post(
+            'https://oapi.dingtalk.com/topapi/v2/user/list',
+            { dept_id: Number(deptId), cursor, size: 100, contain_access_limit: false, language: 'zh_CN' },
+            { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
+          )
         );
         const result = response.data?.result || {};
         const list = result.list || [];
@@ -247,10 +291,76 @@ export class DingTalkSheetClient {
 
   async getRows(module: ModuleConfig): Promise<SheetRow[]> {
     if (!this.isConfigured) {
-      return this.memory[module.key as keyof typeof this.memory] || [];
+      return annotateRows(this.memory[module.key as keyof typeof this.memory] || [], { source: 'mock' });
+    }
+
+    if (LOCAL_FIRST && this.dataSourceId()) {
+      const localRows = await listLocalModuleRows(this.dataSourceId(), module.key);
+      if (localRows.length) {
+        this.logCacheHit('local_db.rows', `${this.dataSourceId()}|${module.key}`);
+        return annotateRows(localRows as SheetRow[], {
+          source: 'local_db',
+          hit: true,
+          stale: false,
+          updatedAt: localRows.reduce((latest, row) => String(row.updatedAt || latest) > latest ? String(row.updatedAt) : latest, '')
+        });
+      }
     }
 
     const sheetId = await this.resolveSheetId(module);
+    const cacheKey = this.rowsCacheKey(module, sheetId);
+    const cached = await getSheetCache<RowsCachePayload>(cacheKey);
+    if (cached) {
+      const age = cacheAgeSeconds(cached.updatedAt);
+      if (age <= Math.max(1, CACHE_TTL_SECONDS)) {
+        this.logCacheHit('sheet.rows', cacheKey);
+        return annotateRows(cached.payload.rows, { hit: true, stale: false, updatedAt: cached.updatedAt, ageSeconds: age });
+      }
+      if (age <= Math.max(CACHE_TTL_SECONDS, CACHE_STALE_SECONDS)) {
+        this.logCacheHit('sheet.rows.stale', cacheKey);
+        this.refreshRowsCache(module, sheetId, cacheKey).catch((error) => {
+          console.error(`[dingtalk-cache] background refresh failed for ${module.key}`, error?.message || error);
+        });
+        return annotateRows(cached.payload.rows, { hit: true, stale: true, updatedAt: cached.updatedAt, ageSeconds: age });
+      }
+    }
+
+    try {
+      const rows = await this.refreshRowsCache(module, sheetId, cacheKey);
+      await this.replaceLocalRows(module, rows);
+      return rows;
+    } catch (error) {
+      if (cached) {
+        const age = cacheAgeSeconds(cached.updatedAt);
+        this.logCacheHit('sheet.rows.fallback', cacheKey);
+        return annotateRows(cached.payload.rows, { hit: true, stale: true, fallback: true, updatedAt: cached.updatedAt, ageSeconds: age });
+      }
+      throw error;
+    }
+  }
+
+  private async refreshRowsCache(module: ModuleConfig, sheetId: string, cacheKey: string) {
+    const running = rowRefreshes.get(cacheKey);
+    if (running) return running;
+    const promise = this.fetchRowsFromDingTalk(module, sheetId)
+      .then((rows) => {
+        setSheetCache({
+          cacheKey,
+          platform: 'dingtalk',
+          dataSourceId: this.dataSourceId(),
+          moduleKey: module.key,
+          payload: { rows }
+        });
+        return annotateRows(rows, { hit: false, stale: false, updatedAt: new Date().toISOString(), ageSeconds: 0 });
+      })
+      .finally(() => {
+        rowRefreshes.delete(cacheKey);
+      });
+    rowRefreshes.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async fetchRowsFromDingTalk(module: ModuleConfig, sheetId: string): Promise<SheetRow[]> {
     const token = await this.getAccessToken();
     const lastColumn = columnName(module.fields.length - 1);
     const rows: SheetRow[] = [];
@@ -274,6 +384,43 @@ export class DingTalkSheetClient {
     return rows;
   }
 
+  async syncModuleFromRemote(module: ModuleConfig): Promise<{ rows: number }> {
+    if (!this.isConfigured) return { rows: 0 };
+    const sheetId = await this.resolveSheetId(module);
+    const rows = await this.fetchRowsFromDingTalk(module, sheetId);
+    await this.replaceLocalRows(module, rows);
+    await invalidateSheetCache({ platform: 'dingtalk', dataSourceId: this.dataSourceId(), moduleKey: module.key });
+    return { rows: rows.length };
+  }
+
+  async syncPendingLocalChanges(module: ModuleConfig): Promise<{ total: number; success: number; failed: number }> {
+    const dataSourceId = this.dataSourceId();
+    if (!this.isConfigured || !LOCAL_FIRST || !dataSourceId) return { total: 0, success: 0, failed: 0 };
+    const rows = await listPendingLocalModuleRows(dataSourceId, module.key);
+    let success = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      try {
+        if (row.syncAction === 'delete') {
+          await this.syncDeletedRowToRemote(module, row as SheetRow);
+          deleteLocalModuleRow(dataSourceId, module.key, String(row.id || row.rowNumber));
+        } else if (String(row.id || '').startsWith('local-')) {
+          const previousRowNumber = Number(row.rowNumber || 0) > module.dataStartRow ? Number(row.rowNumber) - 1 : undefined;
+          await this.syncCreatedRowToRemote(module, row as SheetRow, previousRowNumber);
+        } else {
+          await this.syncUpdatedRowToRemote(module, row as SheetRow);
+        }
+        success += 1;
+      } catch (error) {
+        failed += 1;
+        this.markRowFailed(module, row as SheetRow, error);
+      }
+    }
+
+    return { total: rows.length, success, failed };
+  }
+
   async createRow(module: ModuleConfig, payload: Record<string, unknown>, existingRows?: SheetRow[]) {
     const rows = existingRows || await this.getRows(module);
     const lastRowNumber = rows.reduce((max, row) => Math.max(max, Number(row.rowNumber) || 0), module.dataStartRow - 1);
@@ -285,12 +432,18 @@ export class DingTalkSheetClient {
       return row;
     }
 
+    if (LOCAL_FIRST && this.dataSourceId()) {
+      this.upsertLocalRow(module, row, 'pending');
+      return row;
+    }
+
     await this.writeRowWithPreviousFormulas(module, rowNumber, row, lastRowNumber >= module.dataStartRow ? lastRowNumber : undefined);
+    await this.afterRemoteWrite(module);
     return row;
   }
 
   async updateRow(module: ModuleConfig, rowId: string, payload: Record<string, unknown>, currentRow?: SheetRow) {
-    const current = currentRow || (await this.getRows(module)).find((item) => item.id === rowId || String(item.rowNumber) === rowId);
+    const current = currentRow || await this.findCurrentRow(module, rowId);
     if (!current) {
       throw new Error('未找到要更新的数据行');
     }
@@ -303,7 +456,13 @@ export class DingTalkSheetClient {
       return updated;
     }
 
+    if (LOCAL_FIRST && this.dataSourceId()) {
+      this.upsertLocalRow(module, updated, 'pending');
+      return updated;
+    }
+
     await this.writeRowWithExistingFormulas(module, updated.rowNumber || module.dataStartRow, updated);
+    await this.afterRemoteWrite(module);
     return updated;
   }
 
@@ -315,15 +474,23 @@ export class DingTalkSheetClient {
       return;
     }
 
-    const current = currentRow || (await this.getRows(module)).find((item) => item.id === rowId || String(item.rowNumber) === rowId);
+    const current = currentRow || await this.findCurrentRow(module, rowId);
     if (!current?.rowNumber) {
       throw new Error('未找到要删除的数据行');
     }
-    await this.writeRow(module, current.rowNumber, {
+    const clearedRow = {
       id: current.id,
       rowNumber: current.rowNumber,
       ...Object.fromEntries(module.fields.map((field) => [field.key, '']))
-    }, false);
+    };
+
+    if (LOCAL_FIRST && this.dataSourceId()) {
+      this.upsertLocalRow(module, clearedRow, 'pending', undefined, 'delete');
+      return;
+    }
+
+    await this.writeRow(module, current.rowNumber, clearedRow, false);
+    await this.afterRemoteWrite(module);
   }
 
   async inspectRow(moduleKey: string, rowNumber: number) {
@@ -367,11 +534,13 @@ export class DingTalkSheetClient {
     const cached = legacyAccessTokenCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now() + 60000) return cached.value;
 
-    const response = await axios.get('https://oapi.dingtalk.com/gettoken', {
-      params: { appkey: this.config.appKey, appsecret: this.config.appSecret },
-      timeout: 12000,
-      ...dingTalkAxiosOptions
-    });
+    const response = await this.trackedAxios('contact.access_token', () =>
+      axios.get('https://oapi.dingtalk.com/gettoken', {
+        params: { appkey: this.config.appKey, appsecret: this.config.appSecret },
+        timeout: 12000,
+        ...dingTalkAxiosOptions
+      })
+    );
     const token = response.data?.access_token;
     if (!token || response.data?.errcode) {
       throw new Error(response.data?.errmsg || '钉钉通讯录 access_token 获取失败');
@@ -381,10 +550,12 @@ export class DingTalkSheetClient {
   }
 
   private async listDepartments(token: string, rootDeptId: number): Promise<any[]> {
-    const response = await axios.post(
-      'https://oapi.dingtalk.com/topapi/v2/department/listsub',
-      { dept_id: rootDeptId },
-      { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
+    const response = await this.trackedAxios('contact.department.list', () =>
+      axios.post(
+        'https://oapi.dingtalk.com/topapi/v2/department/listsub',
+        { dept_id: rootDeptId },
+        { params: { access_token: token }, timeout: 12000, ...dingTalkAxiosOptions }
+      )
     );
     const list = response.data?.result || [];
     const children: any[] = [];
@@ -585,7 +756,7 @@ export class DingTalkSheetClient {
     const referenceDataSource = await getDataSource(referenceModule.dataSourceId);
     if (!referenceDataSource) throw new Error('参考模块的数据源不存在，无法复制公式');
     if (referenceDataSource.platform !== 'dingtalk') throw new Error('当前仅支持从钉钉参考模块复制公式');
-    return new DingTalkSheetClient(referenceDataSource.config);
+    return new DingTalkSheetClient({ ...referenceDataSource.config, dataSourceId: referenceDataSource.id });
   }
 
   private applyFormulaSource(values: string[], formulaSource: FormulaSource | null, targetRowNumber: number) {
@@ -625,6 +796,100 @@ export class DingTalkSheetClient {
     );
   }
 
+  private async replaceLocalRows(module: ModuleConfig, rows: SheetRow[]) {
+    const dataSourceId = this.dataSourceId();
+    if (!LOCAL_FIRST || !dataSourceId) return;
+    await replaceLocalModuleRows({
+      platform: 'dingtalk',
+      dataSourceId,
+      moduleKey: module.key,
+      rows
+    });
+  }
+
+  private upsertLocalRow(
+    module: ModuleConfig,
+    row: SheetRow,
+    syncStatus: 'pending' | 'synced' | 'failed',
+    syncError?: string,
+    syncAction: 'upsert' | 'delete' = 'upsert'
+  ) {
+    const dataSourceId = this.dataSourceId();
+    if (!dataSourceId) return;
+    upsertLocalModuleRow({
+      platform: 'dingtalk',
+      dataSourceId,
+      moduleKey: module.key,
+      row,
+      syncStatus,
+      syncAction,
+      syncError,
+      syncedAt: syncStatus === 'synced' ? new Date().toISOString() : undefined
+    });
+  }
+
+  private async findCurrentRow(module: ModuleConfig, rowId: string) {
+    const dataSourceId = this.dataSourceId();
+    if (LOCAL_FIRST && dataSourceId) {
+      const local = await getLocalModuleRow(dataSourceId, module.key, rowId);
+      if (local) return local as SheetRow;
+    }
+    return (await this.getRows(module)).find((item) => item.id === rowId || String(item.rowNumber) === rowId);
+  }
+
+  private async syncCreatedRowToRemote(module: ModuleConfig, row: SheetRow, lastRowNumber?: number) {
+    const previousRowNumber = typeof lastRowNumber === 'number' && lastRowNumber >= module.dataStartRow ? lastRowNumber : undefined;
+    await this.writeRowWithPreviousFormulas(module, row.rowNumber || module.dataStartRow, row, previousRowNumber);
+    await this.afterRemoteWrite(module);
+    this.markRowSynced(module, row);
+  }
+
+  private async syncUpdatedRowToRemote(module: ModuleConfig, row: SheetRow) {
+    await this.writeRowWithExistingFormulas(module, row.rowNumber || module.dataStartRow, row);
+    await this.afterRemoteWrite(module);
+    this.markRowSynced(module, row);
+  }
+
+  private async syncDeletedRowToRemote(module: ModuleConfig, row: SheetRow) {
+    await this.writeRow(module, row.rowNumber || module.dataStartRow, row, false);
+    await this.afterRemoteWrite(module);
+  }
+
+  private markRowSynced(module: ModuleConfig, row: SheetRow) {
+    const dataSourceId = this.dataSourceId();
+    if (!dataSourceId) return;
+    markLocalModuleRowSync({
+      dataSourceId,
+      moduleKey: module.key,
+      rowId: String(row.id || row.rowNumber),
+      status: 'synced'
+    });
+  }
+
+  private markRowFailed(module: ModuleConfig, row: SheetRow, error: any) {
+    const dataSourceId = this.dataSourceId();
+    if (!dataSourceId) return;
+    markLocalModuleRowSync({
+      dataSourceId,
+      moduleKey: module.key,
+      rowId: String(row.id || row.rowNumber),
+      status: 'failed',
+      error: error?.message || String(error || 'sync failed')
+    });
+  }
+
+  private async afterRemoteWrite(module: ModuleConfig) {
+    await this.invalidateModuleRows(module);
+  }
+
+  private async invalidateModuleRows(module: ModuleConfig) {
+    await invalidateSheetCache({
+      platform: 'dingtalk',
+      dataSourceId: this.dataSourceId(),
+      moduleKey: module.key
+    });
+  }
+
   private async withRetry<T>(request: () => Promise<T>, attempts = 5): Promise<T> {
     let lastError: unknown;
     for (let index = 0; index < attempts; index += 1) {
@@ -647,16 +912,96 @@ export class DingTalkSheetClient {
   private worksheetCacheKey() {
     return `${this.tokenCacheKey()}|${this.config.workbookId || ''}|${this.config.operatorId || ''}`;
   }
+  
+  private rowsCacheKey(module: ModuleConfig, sheetId: string) {
+    return [
+      'dingtalk',
+      this.dataSourceId() || 'env',
+      this.config.workbookId || '',
+      sheetId,
+      module.key,
+      module.dataStartRow,
+      ROW_READ_MAX_ROW,
+      module.fields.map((field) => field.key).join(',')
+    ].join('|');
+  }
+
+  private dataSourceId() {
+    const value = Number(this.config.dataSourceId || 0);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  private logCacheHit(capability: string, path: string) {
+    logApiCall({
+      platform: 'dingtalk',
+      capability,
+      path,
+      cacheHit: true,
+      success: true
+    });
+  }
+
+  private async trackedAxios<T>(capability: string, request: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      const response: any = await request();
+      logApiCall({
+        platform: 'dingtalk',
+        capability,
+        path: capability,
+        statusCode: response?.status,
+        durationMs: Date.now() - startedAt,
+        success: true
+      });
+      return response;
+    } catch (error: any) {
+      logApiCall({
+        platform: 'dingtalk',
+        capability,
+        path: capability,
+        statusCode: error?.response?.status,
+        durationMs: Date.now() - startedAt,
+        success: false,
+        errorCode: errorCode(error)
+      });
+      throw error;
+    }
+  }
 
   private fetchApi(path: string, options: { method?: string; headers?: Record<string, string>; params?: Record<string, unknown>; body?: unknown } = {}) {
     const url = new URL(path, this.config.baseUrl);
     Object.entries(options.params || {}).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
     });
+    const startedAt = Date.now();
+    const capability = path.includes('/ranges/') ? (options.method === 'PUT' ? 'sheet.range.write' : 'sheet.range.read')
+      : path.includes('/sheets') ? (options.method === 'POST' ? 'sheet.create' : 'sheet.list')
+        : path.includes('/oauth2/') ? 'oauth.app_token'
+          : 'dingtalk.api';
     return fetchJson(url.toString(), {
       method: options.method,
       headers: options.headers,
       body: options.body
+    }).then((response) => {
+      logApiCall({
+        platform: 'dingtalk',
+        capability,
+        path,
+        durationMs: Date.now() - startedAt,
+        success: true
+      });
+      return response;
+    }).catch((error) => {
+      logApiCall({
+        platform: 'dingtalk',
+        capability,
+        path,
+        statusCode: error?.response?.status,
+        durationMs: Date.now() - startedAt,
+        success: false,
+        errorCode: errorCode(error)
+      });
+      throw error;
     });
   }
 }

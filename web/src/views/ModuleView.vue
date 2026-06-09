@@ -13,6 +13,7 @@ const canCreate = ref(false);
 const canUpdate = ref(false);
 const canDelete = ref(false);
 const rows = ref<SheetRow[]>([]);
+const cacheMeta = ref<any>(null);
 const keyword = ref('');
 const filters = reactive<Record<string, string | string[]>>({});
 const dialogOpen = ref(false);
@@ -96,6 +97,7 @@ async function load() {
     canCreate.value = data.canCreate;
     canUpdate.value = data.canUpdate;
     canDelete.value = data.canDelete;
+    cacheMeta.value = data.cacheMeta || null;
     rows.value = data.rows;
     if (data.module.key !== 'staff') await loadStaffOptions();
   } catch (error: any) {
@@ -183,6 +185,9 @@ watch(() => route.params.moduleKey, load, { immediate: true });
   <main v-loading="loading" class="content">
     <div class="toolbar">
       <el-input v-model="keyword" class="search-input" :prefix-icon="Search" placeholder="搜索当前模块数据" clearable />
+      <el-tag v-if="cacheMeta?.updatedAt" :type="cacheMeta.stale ? 'warning' : 'success'">
+        Cache {{ cacheMeta.stale ? 'stale' : 'fresh' }} · {{ cacheMeta.updatedAt }}
+      </el-tag>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
       <el-button v-if="canCreate" type="primary" :icon="Plus" @click="openCreate">新增</el-button>
     </div>
@@ -220,6 +225,13 @@ watch(() => route.params.moduleKey, load, { immediate: true });
               {{ row[field.key] }}
             </a>
             <span v-else>{{ row[field.key] || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Sync" width="130">
+          <template #default="{ row }">
+            <el-tag :type="row.syncStatus === 'failed' ? 'danger' : row.syncStatus === 'pending' ? 'warning' : 'success'" size="small">
+              {{ row.syncStatus || 'synced' }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column v-if="canUpdate || canDelete" fixed="right" label="操作" width="128">

@@ -143,3 +143,35 @@ export interface NotificationLog {
   created_at: string;
   createdAtText?: string;
 }
+
+export interface ApiUsageSummary {
+  todayCalls: number;
+  monthCalls: number;
+  todayFailures: number;
+  monthFailures: number;
+  todayTimeouts: number;
+  monthTimeouts: number;
+  todayCacheHits: number;
+  monthCacheHits: number;
+  cacheHitRate: number;
+  monthlyWarnLimit: number;
+  warnLevel: 'ok' | 'warning' | 'danger';
+}
+
+export interface SyncOverview {
+  rows: {
+    total: number;
+    pending: number;
+    failed: number;
+    synced: number;
+  };
+  jobs: Array<Record<string, string | number | null>>;
+  memberLogs: Array<Record<string, string | number | null>>;
+}
+
+export interface DingTalkSyncSettings {
+  enabled: boolean;
+  scheduledTime: string;
+  startupSyncEnabled: boolean;
+  startupDelayMs: number;
+}
