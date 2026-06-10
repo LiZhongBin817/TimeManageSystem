@@ -1,3 +1,6 @@
+/**
+ * 飞书表格适配器：在模块行数据、飞书工作表 API 和应用标准行结构之间做转换。
+ */
 import axios, { AxiosInstance } from 'axios';
 import http from 'http';
 import https from 'https';
@@ -27,6 +30,7 @@ const feishuHttpAgent = new http.Agent({ family: 4 });
 const feishuHttpsAgent = new https.Agent({ family: 4 });
 const feishuAxiosOptions = { httpAgent: feishuHttpAgent, httpsAgent: feishuHttpsAgent };
 
+// 把从 0 开始的字段索引转换为飞书范围字符串使用的表格列名。
 function columnName(index: number) {
   let name = '';
   let n = index + 1;
@@ -43,6 +47,9 @@ function excelSerialToDate(value: number) {
   return date.toISOString().slice(0, 10);
 }
 
+/**
+ * 轻量飞书适配器：对齐路由和服务层所依赖的钉钉客户端接口。
+ */
 export class FeishuSheetClient {
   private config: FeishuConfig;
   private http: AxiosInstance;
@@ -60,6 +67,7 @@ export class FeishuSheetClient {
     return Boolean(this.config.appId && this.config.appSecret && this.config.spreadsheetToken);
   }
 
+  /** 从飞书根部门读取通讯录用户，用于账号同步。 */
   async listEnterpriseMembers(): Promise<EnterpriseMember[]> {
     if (!this.config.appId || !this.config.appSecret) return [];
     const token = await this.getAccessToken();
@@ -114,6 +122,7 @@ export class FeishuSheetClient {
     }));
   }
 
+  /** 把模块字段映射到工作表单元格，并过滤完全空白的行。 */
   async getRows(module: ModuleConfig): Promise<SheetRow[]> {
     const sheetId = await this.resolveSheetId(module);
     const token = await this.getAccessToken();
@@ -175,6 +184,7 @@ export class FeishuSheetClient {
     return response.data?.data;
   }
 
+  /** 缓存 tenant access token 到临近过期前，减少认证请求次数。 */
   private async getAccessToken() {
     if (this.token && this.token.expiresAt > Date.now() + 60000) return this.token.value;
     const response = await this.http.post('/open-apis/auth/v3/tenant_access_token/internal', {
@@ -220,6 +230,7 @@ export class FeishuSheetClient {
     return row;
   }
 
+  /** 只写入一个已配置的行范围，让新增、更新、删除复用同一套单元格映射。 */
   private async writeRow(module: ModuleConfig, rowNumber: number, row: SheetRow) {
     const sheetId = await this.resolveSheetId(module);
     const token = await this.getAccessToken();

@@ -1,3 +1,4 @@
+<!-- 人员分配页面：管理所选数据源下产品、测试、研发人员列表。 -->
 <script setup lang="ts">
 import { Delete, Plus, Refresh, Upload, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -88,10 +89,10 @@ async function removeManualMember(row: StaffMember) {
     await ElMessageBox.confirm(`确认移除外部人员「${row.displayName || '未命名'}」？`, '移除确认', { type: 'warning' });
     members.value = members.value.filter((item) => item.key !== row.key);
   } catch {
-    // cancelled
+    // 用户取消
   }
 }
-
+// 保存整份人员分配列表，因为角色勾选会在服务端展开为按角色存储的记录。
 async function submit() {
   saving.value = true;
   try {

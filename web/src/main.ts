@@ -1,3 +1,6 @@
+/**
+ * Vue 应用启动入口：挂载根组件前安装路由和 Element Plus。
+ */
 import ElementPlus from 'element-plus';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import 'element-plus/dist/index.css';

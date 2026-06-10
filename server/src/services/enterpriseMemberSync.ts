@@ -1,3 +1,6 @@
+/**
+ * 企业成员同步服务：拉取钉钉用户，并新增或更新本地账号身份。
+ */
 import { listDataSources } from '../config/modules';
 import { getDataSourceClient } from '../dataSources';
 import { listUsers, logEnterpriseMemberSync, upsertEnterpriseMembers } from '../db';
@@ -12,6 +15,9 @@ export interface EnterpriseMemberSyncResult {
   message?: string;
 }
 
+/**
+ * 为单个数据源拉取钉钉部门用户，并新增或更新本地身份/账号。
+ */
 export async function syncEnterpriseMembersForDataSource(dataSourceId: number): Promise<EnterpriseMemberSyncResult> {
   const dataSource = (await listDataSources(undefined, true)).find((item) => item.id === dataSourceId && item.enabled);
   if (!dataSource?.id) {

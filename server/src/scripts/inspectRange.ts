@@ -1,3 +1,6 @@
+/**
+ * 调试脚本：检查钉钉工作表范围，用于排查行和表头映射。
+ */
 import '../env';
 import { dingTalkClient } from '../dingtalk/client';
 

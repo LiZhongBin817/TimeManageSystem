@@ -1,3 +1,6 @@
+/**
+ * HTTP 服务入口：组装中间件、路由、调度器、数据库启动和全局错误处理。
+ */
 import cors from 'cors';
 import dns from 'dns';
 import './env';
@@ -12,6 +15,7 @@ const port = Number(process.env.PORT || 4000);
 
 dns.setDefaultResultOrder('ipv4first');
 
+// 启动诊断用于提前发现 OAuth 回调域名和前端域名不一致的问题。
 function warnRuntimeConfig() {
   const publicBase = process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL || '';
   const frontendBase = process.env.FRONTEND_BASE_URL || '';
@@ -33,6 +37,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// 把下游服务或平台错误统一整理成前端可处理的 JSON 结构。
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   const anyError = err as any;

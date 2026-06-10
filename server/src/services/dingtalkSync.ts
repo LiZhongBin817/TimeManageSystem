@@ -1,3 +1,6 @@
+/**
+ * 钉钉到本地的同步服务：同步模块行并记录同步任务状态。
+ */
 import { listDataSources, listModules } from '../config/modules';
 import { createSyncJob, finishSyncJob } from '../db';
 import { DingTalkSheetClient } from '../dingtalk/client';
@@ -5,6 +8,9 @@ import { moduleDataSourceId } from '../dataSources';
 
 let syncing = false;
 
+/**
+ * 把钉钉工作表行拉取到本地存储，并记录同步任务状态供管理员查看。
+ */
 export async function syncDingTalkToLocal(options: { dataSourceId?: number; moduleKey?: string } = {}) {
   if (syncing) {
     return {

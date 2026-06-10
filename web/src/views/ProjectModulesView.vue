@@ -1,3 +1,4 @@
+<!-- 项目模块导航页：列出可读项目模块，并引导用户进入通用模块视图。 -->
 <script setup lang="ts">
 import { Delete, Edit, Filter, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -119,7 +120,7 @@ function clearFilters() {
 function isCompletedRow(row: SheetRow) {
   return ['是', '已完成', '完成', 'true'].includes(String(row.isCompleted ?? '').trim().toLowerCase());
 }
-
+// 获取当前用户可读的项目模块，并在需要时跳转到第一个可用模块。
 async function loadModules() {
   modules.value = await getProjectModules();
   if (!selectedKey.value && modules.value.length) selectedKey.value = modules.value[0].key;

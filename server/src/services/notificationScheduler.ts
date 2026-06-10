@@ -1,3 +1,6 @@
+/**
+ * 后台调度器：负责全局和个人看板通知。
+ */
 import { AuthUser } from '../auth';
 import { all, get } from '../db';
 import { getDataSource } from '../config/modules';
@@ -78,6 +81,7 @@ async function buildUserSchedulerUsers(scheduledTime: string, today: string): Pr
   }));
 }
 
+// 轮询时按上海本地日期和时间检查全局及个人通知计划。
 async function tick() {
   if (running) return;
   running = true;

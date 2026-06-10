@@ -1,3 +1,6 @@
+/**
+ * 后台调度器：在启动时和配置的每日时间触发钉钉同步。
+ */
 import { getDingTalkSyncSettings } from '../db';
 import { syncDingTalkToLocal } from './dingtalkSync';
 import { syncEnterpriseMembersForDingTalk } from './enterpriseMemberSync';
@@ -24,6 +27,7 @@ function timeInShanghai() {
   return `${hour}:${minute}`;
 }
 
+// 启动同步、每日同步和重试轮询共用的调度入口。
 async function runSync(reason: string) {
   if (running) return false;
   running = true;

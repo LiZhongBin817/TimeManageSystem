@@ -1,0 +1,11 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="12" y="12" width="104" height="104" rx="12" fill="url(#paint0_linear)"/>
+  <rect x="12.75" y="12.75" width="102.5" height="102.5" rx="11.25" stroke="#7DD3FC" stroke-opacity="0.55" stroke-width="1.5"/>
+  <text x="64" y="72" text-anchor="middle" fill="white" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="0">TMS</text>
+  <defs>
+    <linearGradient id="paint0_linear" x1="12" y1="12" x2="116" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#14B8A6"/>
+    </linearGradient>
+  </defs>
+</svg>

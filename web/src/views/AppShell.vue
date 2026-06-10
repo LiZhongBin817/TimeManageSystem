@@ -1,5 +1,6 @@
+<!-- 已登录应用外壳：加载当前用户和模块，并渲染顶层导航。 -->
 <script setup lang="ts">
-import { DataAnalysis, Grid, List, Monitor, SwitchButton, Tools, UserFilled } from '@element-plus/icons-vue';
+import { DataAnalysis, List, Monitor, SwitchButton, Tools, UserFilled } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -44,7 +45,7 @@ function formatBeijingPart(value: Date, part: 'date' | 'time') {
   if (part === 'date') return `${partMap.year}-${partMap.month}-${partMap.day}`;
   return `${partMap.hour}:${partMap.minute}:${partMap.second}`;
 }
-
+// 一次性加载用户和模块元数据，使导航能反映当前权限。
 async function boot() {
   try {
     user.value = await getMe();
@@ -83,7 +84,7 @@ watch(
   <div class="app-layout">
     <aside class="sidebar">
       <div class="brand">
-        <el-icon><Grid /></el-icon>
+        <span class="brand-mark">TMS</span>
         <span>任务管理系统</span>
       </div>
       <el-menu :default-active="active" router class="nav-menu">

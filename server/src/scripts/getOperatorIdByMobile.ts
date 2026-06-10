@@ -1,3 +1,6 @@
+/**
+ * 工具脚本：通过手机号解析钉钉 operator userId，并可写入 .env。
+ */
 import axios from 'axios';
 import '../env';
 import fs from 'fs';

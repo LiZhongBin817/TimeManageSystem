@@ -1,3 +1,6 @@
+/**
+ * 前端共享 TypeScript 类型：覆盖用户、模块、权限、通知和同步状态。
+ */
 export type Role = 'admin' | 'editor' | 'viewer';
 export type PlatformKey = 'dingtalk' | 'feishu';
 export type ModuleCategory = 'project' | 'staff' | 'todo';

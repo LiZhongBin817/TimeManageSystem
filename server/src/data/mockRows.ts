@@ -1,3 +1,6 @@
+/**
+ * 开发环境兜底数据：当表格型项目模块需要示例数据时使用。
+ */
 import { ModuleKey } from '../config/modules';
 
 export interface SheetRow {

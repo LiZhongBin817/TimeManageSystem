@@ -1,3 +1,6 @@
+/**
+ * 诊断脚本：检查钉钉凭据是否能访问已配置的工作簿数据。
+ */
 import '../env';
 import { dingTalkClient } from '../dingtalk/client';
 

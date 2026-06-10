@@ -1,3 +1,6 @@
+/**
+ * 认证辅助模块：生成 JWT 会话、校验账号状态，并把当前用户挂载到 Express 请求上。
+ */
 import bcrypt from 'bcryptjs';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -32,6 +35,10 @@ function assertEnabled(user: UserRecord) {
   }
 }
 
+/**
+ * 解析用户实际使用的数据源后，构建带签名的会话载荷。
+ * 用户偏好可能覆盖登录时选择的数据源，因此所有登录入口都复用这段检查。
+ */
 async function buildSession(user: UserRecord, dataSourceId: number, provider: AuthUser['provider']) {
   assertEnabled(user);
   const preference = await getUserDataSourcePreference(user.id);
@@ -98,6 +105,10 @@ function dataSourceChanged(res: Response, message = '账号数据源已变更，
   res.status(409).json({ code: 'DATA_SOURCE_CHANGED', message });
 }
 
+/**
+ * 受保护 API 路由的 Express 守卫：校验 JWT，并重新读取可能变化的账号状态。
+ * 当所选数据源被切换或禁用时拒绝过期会话。
+ */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;

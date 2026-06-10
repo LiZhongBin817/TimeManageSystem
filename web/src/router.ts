@@ -1,3 +1,6 @@
+/**
+ * 前端路由：定义需登录页面，并把匿名用户重定向到登录页。
+ */
 import { createRouter, createWebHistory } from 'vue-router';
 import { clearToken, getToken } from './api';
 import AppShell from './views/AppShell.vue';
@@ -28,7 +31,7 @@ export const router = createRouter({
     }
   ]
 });
-
+// 前端按 token 存在性保护页面，服务端仍会真正校验 token。
 router.beforeEach((to) => {
   if (!['/login', '/oauth/callback'].includes(to.path) && !getToken()) {
     return '/login';

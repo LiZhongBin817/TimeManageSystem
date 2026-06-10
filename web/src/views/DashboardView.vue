@@ -1,3 +1,4 @@
+<!-- 看板页面：展示项目进度、进行中排期、研发统计和通知操作。 -->
 <script setup lang="ts">
 import { Bell, Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -44,7 +45,7 @@ const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.t
 const inProgressTotal = computed(() => developingItems.value.length + testingItems.value.length);
 const totalModules = computed(() => summary.value?.moduleStats?.length || 0);
 const cacheInfo = computed(() => summary.value?.cache || {});
-
+// 把按模块统计的研发数据压平成总量和分段条形数据。
 const developerStats = computed(() => {
   const moduleStats = summary.value?.moduleStats || [];
   return ((summary.value?.developerStats || []) as DeveloperStat[])
@@ -68,7 +69,7 @@ const developerStats = computed(() => {
 });
 
 const maxDeveloperTotal = computed(() => Math.max(1, ...developerStats.value.map((item) => item.total)));
-
+// 刷新看板数据；失败信息在页面内展示，应用外壳仍可继续使用。
 async function load() {
   loading.value = true;
   try {

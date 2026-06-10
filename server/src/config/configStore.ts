@@ -1,3 +1,6 @@
+/**
+ * 配置仓储：管理数据源实例、模块元数据、字段以及角色级能力。
+ */
 import { all, get, run, withPersistenceBatch } from '../db';
 
 export type Role = 'admin' | 'editor' | 'viewer';
@@ -66,6 +69,7 @@ interface FieldRow {
   sort_order: number;
 }
 
+// 数据库以 JSON 存储配置，在仓储边界统一解析和规范化。
 function parseDataSource(row: any): DataSourceInstance {
   return {
     id: row.id,
@@ -152,6 +156,10 @@ function envSharedConfig(platform: DataSourceInstance['platform']): Record<strin
   };
 }
 
+/**
+ * 新增同平台实例时继承共享凭据，减少重复配置。
+ * 每个实例的表格设置仍可单独编辑，密钥可放在环境变量或首个实例中。
+ */
 async function inheritSharedConfig(input: Partial<DataSourceInstance> & { platform: DataSourceInstance['platform']; config: Record<string, string> }) {
   const inherited = envSharedConfig(input.platform);
   const rows = await all<any>(
@@ -218,6 +226,9 @@ export async function findModule(key: string) {
   return row ? hydrateModule(row) : undefined;
 }
 
+/**
+ * 新增或更新模块元数据，并阻止重复模块 key 或同数据源下的同名模块。
+ */
 export async function saveModule(input: Partial<ModuleConfig> & { key: string; title: string; sheetName: string }) {
   const title = input.title.trim();
   const category = input.category || 'project';
@@ -312,6 +323,7 @@ export async function replaceModuleFields(moduleKey: string, fields: ModuleField
   return findModule(moduleKey);
 }
 
+// 返回配置前，把模块记录和有序字段定义组合起来。
 async function hydrateModule(row: ModuleRow): Promise<ModuleConfig> {
   const fields = await all<FieldRow>('SELECT * FROM module_fields WHERE module_key = ? ORDER BY sort_order, id', [row.module_key]);
   return {

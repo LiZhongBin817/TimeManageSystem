@@ -1,3 +1,6 @@
+/**
+ * 前端 API 客户端：集中处理 HTTP 调用、token 存储和响应解包。
+ */
 import axios from 'axios';
 import type {
   CreateManagedUserPayload,
@@ -27,13 +30,13 @@ const TOKEN_KEY = 'tms-token';
 export const api = axios.create({
   baseURL: '/api'
 });
-
+// 登录后为每个 API 请求附加 bearer token。
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
-
+// 数据源变更或禁用会使当前会话失效，并引导用户回到登录页。
 api.interceptors.response.use(
   (response) => response,
   (error) => {

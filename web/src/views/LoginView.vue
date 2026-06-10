@@ -1,3 +1,4 @@
+<!-- 登录页面：支持企业 OAuth，以及按数据源配置启用的本地兜底登录。 -->
 <script setup lang="ts">
 import { Connection, Lock, User } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
@@ -7,6 +8,7 @@ import { clearToken, getDataSourceInstances, getDataSourcePlatforms, getLoginCon
 import type { DataSourceInstance, DataSourcePlatform, PlatformKey } from '../types';
 
 type LoginMode = 'oauth' | 'local';
+const rememberPrefix = 'tms-remember-login:';
 
 const router = useRouter();
 const route = useRoute();
@@ -16,6 +18,7 @@ const platforms = ref<DataSourcePlatform[]>([]);
 const instances = ref<DataSourceInstance[]>([]);
 const localLoginEnabled = ref(false);
 const loginMode = ref<LoginMode>('local');
+const rememberPassword = ref(false);
 const form = reactive({
   username: '',
   password: '',
@@ -30,6 +33,37 @@ const loginModeOptions = computed(() => {
   if (localLoginEnabled.value) options.push({ label: '账号密码登录', value: 'local' });
   return options;
 });
+
+function rememberedKey(platform: PlatformKey) {
+  return `${rememberPrefix}${platform}`;
+}
+
+function applyRememberedCredentials(platform = form.platform) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(rememberedKey(platform)) || '{}');
+    if (saved?.username && saved?.password) {
+      form.username = saved.username;
+      form.password = saved.password;
+      rememberPassword.value = true;
+      return;
+    }
+  } catch {
+    localStorage.removeItem(rememberedKey(platform));
+  }
+  rememberPassword.value = false;
+}
+
+function persistRememberedCredentials() {
+  const key = rememberedKey(form.platform);
+  if (rememberPassword.value) {
+    localStorage.setItem(key, JSON.stringify({
+      username: form.username,
+      password: form.password
+    }));
+  } else {
+    localStorage.removeItem(key);
+  }
+}
 
 async function loadPlatforms() {
   platforms.value = await getDataSourcePlatforms();
@@ -68,6 +102,7 @@ async function submitLocalLogin() {
   loading.value = true;
   try {
     await login(form.username, form.password, form.platform);
+    persistRememberedCredentials();
     ElMessage.success('登录成功');
     router.push('/dashboard');
   } catch (error: any) {
@@ -85,7 +120,10 @@ function submitLogin() {
   startOAuthLogin();
 }
 
-watch(() => form.platform, loadInstances);
+watch(() => form.platform, async (platform) => {
+  applyRememberedCredentials(platform);
+  await loadInstances();
+});
 onMounted(async () => {
   const oauthError = String(route.query.oauthError || '');
   if (oauthError) ElMessage.error(oauthError);
@@ -93,6 +131,7 @@ onMounted(async () => {
     const config = await getLoginConfig();
     localLoginEnabled.value = config.localLoginEnabled;
     loginMode.value = config.localLoginEnabled ? 'local' : 'oauth';
+    applyRememberedCredentials();
     await loadPlatforms();
     await loadInstances();
   } catch {
@@ -106,13 +145,30 @@ onMounted(async () => {
 
 <template>
   <main class="login-page">
-    <section class="login-panel">
-      <div>
+    <div class="login-backdrop" aria-hidden="true">
+      <div class="login-grid"></div>
+      <div class="login-scanline"></div>
+    </div>
+
+    <section class="login-shell">
+      <div class="login-showcase">
+        <div class="login-mark">TMS</div>
         <p class="eyebrow">Task Management System</p>
         <h1>任务管理系统</h1>
+        <p class="login-subtitle">聚合项目、人员、待办与企业表格同步，一处入口掌控交付节奏。</p>
+        <div class="login-metrics" aria-hidden="true">
+          <span>Project Flow</span>
+          <strong>Live Sync</strong>
+          <span>Enterprise Login</span>
+        </div>
       </div>
 
-      <el-form class="login-form" @submit.prevent="submitLogin">
+      <el-form class="login-panel login-form" @submit.prevent="submitLogin">
+        <div class="login-panel-header">
+          <span>Secure Access</span>
+          <strong>{{ loginMode === 'local' ? '账号登录' : currentProviderLabel }}</strong>
+        </div>
+
         <el-form-item>
           <el-select v-model="form.platform" size="large" class="full-field" placeholder="企业平台" :prefix-icon="Connection">
             <el-option v-for="item in platforms" :key="item.key" :label="item.label" :value="item.key" />
@@ -128,6 +184,10 @@ onMounted(async () => {
           <el-form-item>
             <el-input v-model="form.password" size="large" placeholder="密码" type="password" :prefix-icon="Lock" show-password />
           </el-form-item>
+          <div class="login-options">
+            <el-checkbox v-model="rememberPassword">记住密码</el-checkbox>
+            <span>仅保存在当前浏览器</span>
+          </div>
         </template>
 
         <el-button class="full-button" size="large" type="primary" :loading="loading || loadingSources" @click="submitLogin">

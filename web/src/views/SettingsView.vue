@@ -1,3 +1,4 @@
+<!-- 管理设置页：管理数据源、模块、用户、权限、通知和同步工具。 -->
 <script setup lang="ts">
 import { Bell, Delete, Edit, Plus, Refresh, Upload } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -281,7 +282,7 @@ function assign<T extends object>(target: T, value: T) {
   Object.keys(target).forEach((key) => delete (target as any)[key]);
   Object.assign(target, JSON.parse(JSON.stringify(value)));
 }
-
+// 设置页启动时加载各管理面板数据，使首次加载后切换标签更快。
 async function load() {
   loading.value = true;
   try {
@@ -438,6 +439,15 @@ async function pushNotificationNow() {
   }
 }
 
+async function refreshNotificationLogs() {
+  try {
+    notificationLogs.value = await getNotificationLogs();
+    ElMessage.success('推送记录已刷新');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '推送记录刷新失败');
+  }
+}
+
 async function loadPermissions() {
   if (!isAdmin.value || !permissionSubjectId.value) return;
   try {
@@ -492,7 +502,7 @@ function openSourceEdit(row: DataSourceInstance) {
   sourceForm.staffTemplateDataSourceId = null;
   sourceDialogOpen.value = true;
 }
-
+// 保存数据源配置后，刷新依赖它的模块和用户选项列表。
 async function submitSource() {
   try {
     const payload = JSON.parse(JSON.stringify(sourceForm));
@@ -556,7 +566,7 @@ function addField() {
 function removeField(index: number) {
   moduleForm.fields.splice(index, 1);
 }
-
+// 从参考模块复制字段，用于快速创建相似的项目模块。
 function applyReferenceModule(referenceModuleKey?: string) {
   const source = referenceModules.value.find((item) => item.key === referenceModuleKey);
   if (!source) return;
@@ -566,7 +576,7 @@ function applyReferenceModule(referenceModuleKey?: string) {
   moduleForm.editable = source.editable;
   moduleForm.fields = JSON.parse(JSON.stringify(source.fields));
 }
-
+// 先持久化模块元数据，再按保存后的模块 id 写入有序字段列表。
 async function submitModule() {
   try {
     const moduleKey = String(moduleForm.key || '').trim();
@@ -661,7 +671,7 @@ function openUserCreate() {
   Object.assign(userForm, emptyUserForm());
   userDialogOpen.value = true;
 }
-
+// 用户保存逻辑覆盖新增/编辑、可选密码变更、启用状态、角色和默认数据源。
 async function submitUser() {
   try {
     const displayName = userForm.displayName.trim();
@@ -990,6 +1000,7 @@ onMounted(load);
               <el-button type="primary" plain :loading="notificationUserSaving" @click="submitNotificationUserSettings">保存个人定时</el-button>
               <el-button v-if="isAdmin" :loading="notificationTesting" @click="testNotification">发送测试消息</el-button>
               <el-button type="success" :icon="Bell" :loading="notificationPushing" @click="pushNotificationNow">立即推送汇总</el-button>
+              <el-button :icon="Refresh" @click="refreshNotificationLogs">刷新推送记录</el-button>
             </div>
             <el-alert
               type="info"

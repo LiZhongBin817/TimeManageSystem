@@ -1,3 +1,6 @@
+/**
+ * REST API 层：校验请求、执行权限控制，并把数据操作委托给服务和数据源客户端。
+ */
 import { Router } from 'express';
 import { z } from 'zod';
 import { login, loginWithOAuth, requireAuth, signOAuthState, verifyOAuthState } from './auth';
@@ -64,6 +67,7 @@ import {
 
 export const router = Router();
 
+// 移除敏感数据库字段，并补充前端易用的登录能力标记。
 function serializeUser(user: any) {
   const hasLocalLogin = Boolean(user.password_hash);
   const hasEnterpriseLogin = Number(user.identity_count || 0) > 0;
@@ -194,6 +198,7 @@ async function modulePermission(user: NonNullable<Express.Request['user']>, modu
   });
 }
 
+// 把实际权限补到模块配置上，便于页面隐藏不可用操作。
 async function decorateModule(user: NonNullable<Express.Request['user']>, module: ModuleConfig) {
   const permission = await modulePermission(user, module);
   return {
@@ -228,6 +233,7 @@ async function legacyStaffOptionsForDataSource(user: NonNullable<Express.Request
   };
 }
 
+// 首次使用时按需把旧版人员表格选项迁移为本地分配记录。
 async function ensureStaffAssignments(user: NonNullable<Express.Request['user']>) {
   if (await countDataSourceStaffAssignments(user.dataSourceId)) return;
   try {
@@ -236,7 +242,7 @@ async function ensureStaffAssignments(user: NonNullable<Express.Request['user']>
       await importStaffOptionsToAssignments(user.dataSourceId, options);
     }
   } catch {
-    // Legacy spreadsheet import is best-effort; local staff assignments remain the source of truth.
+    // 旧表格导入只做尽力尝试，本地人员分配仍然是可信来源。
   }
 }
 
@@ -355,6 +361,7 @@ router.get('/auth/oauth/:provider/callback', async (req, res) => {
   }
 });
 
+// 下面的路由都要求请求已通过登录认证。
 router.use(requireAuth);
 
 router.get('/admin/api-usage', async (req, res, next) => {
@@ -743,6 +750,7 @@ router.post('/staff/initialize', async (req, res, next) => {
   }
 });
 
+// 基于当前可读项目模块和激活数据源直接生成看板数据。
 router.get('/dashboard/summary', async (req, res, next) => {
   try {
     res.json(await buildDashboardSummary(req.user!));
@@ -1203,6 +1211,10 @@ router.get('/audit-logs', async (req, res) => {
   res.json({ logs });
 });
 
+/**
+ * 旧版 /sheets 路由和新版 /project-modules 路由共用的行读取器。
+ * 项目数据加载后再过滤，确保非管理员用户只能看到自己负责的研发行。
+ */
 async function getModuleRows(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
@@ -1250,6 +1262,7 @@ async function createModuleRow(req: any, res: any, next: any) {
   }
 }
 
+// 更新前同时校验模块权限和行归属，再交给数据源适配器处理。
 async function updateModuleRow(req: any, res: any, next: any) {
   try {
     const module = await findModule(req.params.module);
@@ -1317,6 +1330,7 @@ function normalizeModuleInput(input: z.infer<typeof moduleSchema>) {
   };
 }
 
+// 新增模块默认使用用户当前选择的数据源，除非请求明确指定其它数据源。
 function normalizeModuleInputForRequest(input: z.infer<typeof moduleSchema>, user: NonNullable<Express.Request['user']>) {
   const normalized = normalizeModuleInput(input);
   return {

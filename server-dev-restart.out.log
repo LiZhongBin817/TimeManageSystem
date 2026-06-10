@@ -7,3 +7,83 @@
 [notification-scheduler] started
 API server listening on http://localhost:4000
 [dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[oauth-callback] received provider=dingtalk code=no state=no
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 195ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 146ms
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 381ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 354ms
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 174ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 359ms
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 184ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 1152ms
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 197ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 404ms
+[INFO] 11:49:17 Restarting: D:\学习项目\TimeManageSystem\server\src\auth.ts has been modified
+[INFO] 11:49:21 Restarting: D:\学习项目\TimeManageSystem\server\src\index.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 11:50:59 Restarting: D:\学习项目\TimeManageSystem\server\src\dingtalk\client.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 203ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 162ms
+[INFO] 11:59:13 Restarting: D:\学习项目\TimeManageSystem\server\src\services\notification.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 12:04:31 Restarting: D:\学习项目\TimeManageSystem\server\src\auth.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 12:07:20 Restarting: D:\学习项目\TimeManageSystem\server\src\auth.ts has been modified
+[INFO] 12:07:44 Restarting: D:\学习项目\TimeManageSystem\server\src\services\notification.ts has been modified
+[ERROR] 12:07:46 TypeError: Router.use() requires a middleware function but got a undefined
+[INFO] 12:09:24 Restarting: D:\学习项目\TimeManageSystem\server\src\services\notification.ts has been modified
+[ERROR] 12:09:25 TypeError: Router.use() requires a middleware function but got a undefined
+[INFO] 12:10:20 Restarting: D:\学习项目\TimeManageSystem\server\src\config\configStore.ts has been modified
+[INFO] 12:10:21 Restarting: D:\学习项目\TimeManageSystem\server\src\env.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 12:11:00 Restarting: D:\学习项目\TimeManageSystem\server\src\services\notification.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 12:11:42 Restarting: D:\学习项目\TimeManageSystem\server\src\auth.ts has been modified
+[INFO] 12:11:43 Restarting: D:\学习项目\TimeManageSystem\server\src\db.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[INFO] 12:13:26 Restarting: D:\学习项目\TimeManageSystem\server\src\routes.ts has been modified
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup
+[dingtalk-sync] finished startup: sheets success=6, failed=0; members success=1, failed=0, total=3
+[oauth-callback] received provider=dingtalk code=yes state=yes
+[oauth] POST https://api.dingtalk.com/v1.0/oauth2/userAccessToken -> 200 in 179ms
+[oauth] GET https://api.dingtalk.com/v1.0/contact/users/me -> 200 in 115ms
+[notification-scheduler] pushing personal dashboard summary for user 4 at 12:45

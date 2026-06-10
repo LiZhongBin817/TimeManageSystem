@@ -1,3 +1,6 @@
+/**
+ * OAuth 平台集成：生成登录 URL、回调 URL，并规范化钉钉/飞书身份信息。
+ */
 import axios from 'axios';
 import http from 'http';
 import https from 'https';
@@ -14,6 +17,7 @@ interface FetchJsonOptions {
   body?: unknown;
 }
 
+// OAuth HTTP 调用单独设置超时和日志，便于诊断回调失败。
 async function fetchJson(url: string, options: FetchJsonOptions = {}) {
   const startedAt = Date.now();
   try {
@@ -65,6 +69,7 @@ function isTransientOAuthError(error: any) {
     || message.includes('network');
 }
 
+// 平台回调流程只重试临时故障，然后再把错误返回登录页。
 async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = 3) {
   let lastError: unknown;
   for (let index = 0; index < attempts; index += 1) {
@@ -118,6 +123,7 @@ function publicBaseUrl() {
   return process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL || 'http://localhost:4000';
 }
 
+// 规范化误带的 /api 后缀，确保生成的回调 URL 符合平台要求。
 function normalizePublicBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '');
   try {
@@ -162,6 +168,9 @@ export function frontendLoginErrorUrl(message: string) {
   return `${base}/login?force=1&oauthError=${encodeURIComponent(message)}`;
 }
 
+/**
+ * 根据所选数据源实例生成平台授权 URL。
+ */
 export function authUrl(provider: IdentityProvider, dataSource: DataSourceInstance, redirectUri: string, state: string) {
   if (provider === 'dingtalk') {
     const appKey = requireConfig(dataSource.config.appKey, '钉钉 AppKey');
@@ -195,6 +204,7 @@ export async function fetchOAuthIdentity(provider: IdentityProvider, dataSource:
   return fetchFeishuIdentity(dataSource, code);
 }
 
+// 用钉钉授权码换取认证和数据库层使用的标准身份结构。
 async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: string): Promise<OAuthIdentity> {
   const appKey = requireConfig(dataSource.config.appKey, '钉钉 AppKey');
   const appSecret = requireConfig(dataSource.config.appSecret, '钉钉 AppSecret');
@@ -235,6 +245,7 @@ async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: strin
   };
 }
 
+// 用飞书授权码换取认证和数据库层使用的标准身份结构。
 async function fetchFeishuIdentity(dataSource: DataSourceInstance, code: string): Promise<OAuthIdentity> {
   const appId = requireConfig(dataSource.config.appId, '飞书 AppId');
   const appSecret = requireConfig(dataSource.config.appSecret, '飞书 AppSecret');

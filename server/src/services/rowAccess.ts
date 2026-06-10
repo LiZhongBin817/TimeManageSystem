@@ -1,9 +1,13 @@
+/**
+ * 项目行访问辅助方法：限制非管理员用户只访问自己负责的研发行。
+ */
 import { AuthUser } from '../auth';
 
 type RowLike = Record<string, unknown>;
 
 const developerSeparators = /[、，,\s;；/|]+/;
 
+// 管理员/编辑可查看全部项目行，查看者只限定到自己的研发名称。
 export function isProjectDataRestricted(user: AuthUser) {
   return user.role !== 'admin';
 }

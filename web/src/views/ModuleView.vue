@@ -1,3 +1,4 @@
+<!-- 通用模块表格页：按配置字段渲染项目、人员、待办模块的行增删改查。 -->
 <script setup lang="ts">
 import { Delete, Edit, Plus, Refresh, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -100,7 +101,7 @@ function clearFilters() {
 function isCompletedRow(row: SheetRow) {
   return ['是', '已完成', '完成', 'true'].includes(String(row.isCompleted ?? '').trim().toLowerCase());
 }
-
+// 人员选择项单独加载，因为只有项目/待办模块需要人员分配选项。
 async function loadStaffOptions() {
   try {
     staffOptions.value = await getStaffOptions();
@@ -108,7 +109,7 @@ async function loadStaffOptions() {
     staffOptions.value = { product: [], tester: [], developer: [] };
   }
 }
-
+// 同时加载模块元数据和行数据，确保表格列始终匹配当前模块配置。
 async function load() {
   loading.value = true;
   try {

@@ -1,3 +1,6 @@
+/**
+ * 钉钉表格适配器：处理令牌、工作簿元数据、工作表增删改查、本地缓存和 API 用量记录。
+ */
 import axios from 'axios';
 import http from 'http';
 import https from 'https';
@@ -69,6 +72,7 @@ interface RowsCachePayload {
   rows: SheetRow[];
 }
 
+// 附加缓存元数据，同时不改变普通消费者拿到的 JSON 行数据。
 function annotateRows(rows: SheetRow[], meta: Record<string, unknown>) {
   Object.defineProperty(rows, 'cacheMeta', {
     value: meta,
@@ -88,6 +92,7 @@ function errorCode(error: any) {
   return String(error?.response?.data?.code || error?.response?.status || error?.code || error?.message || 'unknown').slice(0, 120);
 }
 
+// 只重试后续尝试可能恢复的平台或网络故障。
 function isTransientDingTalkError(error: any) {
   const status = error?.response?.status;
   const code = String(error?.code || '');
@@ -99,6 +104,7 @@ function isTransientDingTalkError(error: any) {
     || message.includes('fetch failed');
 }
 
+// 把从 0 开始的字段索引转换为钉钉范围使用的 Excel 风格列名。
 function columnName(index: number) {
   let name = '';
   let n = index + 1;
@@ -145,6 +151,10 @@ async function fetchJsonWithAxios(
   }
 }
 
+/**
+ * 单个钉钉工作簿的有状态适配器。公开方法提供应用层行操作；
+ * 私有辅助方法封装令牌、工作表、公式、缓存、重试和本地优先等细节。
+ */
 export class DingTalkSheetClient {
   private config: DingTalkConfig;
   private memory = JSON.parse(JSON.stringify(mockRows)) as typeof mockRows;
@@ -164,6 +174,7 @@ export class DingTalkSheetClient {
     return Boolean(this.config.appKey && this.config.appSecret && this.config.workbookId && this.config.operatorId);
   }
 
+  /** 读取企业通讯录，并对跨部门重复用户去重。 */
   async listEnterpriseMembers(): Promise<EnterpriseMember[]> {
     if (!this.config.appKey || !this.config.appSecret) return [];
     const token = await this.getLegacyAccessToken();
@@ -209,6 +220,7 @@ export class DingTalkSheetClient {
     return Array.from(members.values());
   }
 
+  /** 列出工作簿工作表；由于元数据较少变化，使用短时内存缓存。 */
   async listWorksheets(): Promise<WorksheetMeta[]> {
     if (!this.isConfigured) {
       return Object.entries(mockRows).map(([key]) => ({ sheetId: key, name: key }));
@@ -310,6 +322,7 @@ export class DingTalkSheetClient {
     }
   }
 
+  /** 刷新单个模块缓存；并发调用会复用同一个进行中的 Promise。 */
   private async refreshRowsCache(module: ModuleConfig, sheetId: string, cacheKey: string) {
     const running = rowRefreshes.get(cacheKey);
     if (running) return running;
@@ -331,6 +344,7 @@ export class DingTalkSheetClient {
     return promise;
   }
 
+  /** 分块读取行，并在尾部连续空白后停止，避免扫描大量空行。 */
   private async fetchRowsFromDingTalk(module: ModuleConfig, sheetId: string): Promise<SheetRow[]> {
     const token = await this.getAccessToken();
     const lastColumn = columnName(module.fields.length - 1);
@@ -658,6 +672,7 @@ export class DingTalkSheetClient {
     );
   }
 
+  /** 写入前从邻近源行复制公式单元格，以保留表格公式。 */
   private async writeRowWithPreviousFormulas(module: ModuleConfig, rowNumber: number, row: SheetRow, previousRowNumber?: number) {
     const formulaSource = previousRowNumber
       ? await this.getFormulaSourceFromRow(module, previousRowNumber)
@@ -767,6 +782,7 @@ export class DingTalkSheetClient {
     );
   }
 
+  /** 把远端行镜像到本地表，便于故障或限流时读取兜底。 */
   private async replaceLocalRows(module: ModuleConfig, rows: SheetRow[]) {
     const dataSourceId = this.dataSourceId();
     if (!LOCAL_FIRST || !dataSourceId) return;
@@ -861,6 +877,7 @@ export class DingTalkSheetClient {
     });
   }
 
+  /** 钉钉调用的统一重试封装，包含递增退避和过期缓存兜底。 */
   private async withRetry<T>(request: () => Promise<T>, attempts = 5): Promise<T> {
     let lastError: unknown;
     for (let index = 0; index < attempts; index += 1) {
@@ -912,6 +929,7 @@ export class DingTalkSheetClient {
     });
   }
 
+  /** 记录每次钉钉 API 调用，用于管理员用量看板和告警阈值。 */
   private async trackedAxios<T>(capability: string, request: () => Promise<T>): Promise<T> {
     const startedAt = Date.now();
     try {

@@ -1,3 +1,6 @@
+/**
+ * 内嵌 SQL.js 持久化层：负责表结构迁移、种子数据、用户、权限、缓存、同步任务和本地行存储。
+ */
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
@@ -136,6 +139,7 @@ let batchDepth = 0;
 let batchDirty = false;
 const defaultUserPassword = process.env.DEFAULT_USER_PASSWORD || '123456';
 
+// SQL.js 在内存中维护数据，每次写操作后需要导出回数据库文件。
 function persist() {
   const data = db.export();
   fs.writeFileSync(dbPath, Buffer.from(data));
@@ -150,6 +154,10 @@ export function run(sql: string, params: unknown[] = []) {
   }
 }
 
+/**
+ * 逻辑事务执行多条 SQL 时延迟落盘。
+ * 这样可以避免每次行级修改都导出整份 SQL.js 数据库。
+ */
 export async function withPersistenceBatch<T>(fn: () => T | Promise<T>) {
   batchDepth += 1;
   try {
@@ -243,6 +251,10 @@ async function backfillDefaultPasswords() {
   }
 }
 
+/**
+ * 创建并迁移应用依赖的所有表，然后写入最低可运行的初始数据。
+ * 迁移方式刻意保持追加式，便于已有本地数据库原地升级。
+ */
 export async function initDatabase() {
   const SQL = await initSqlJs();
   db = fs.existsSync(dbPath) ? new SQL.Database(fs.readFileSync(dbPath)) : new SQL.Database();
@@ -581,6 +593,7 @@ export async function initDatabase() {
   await seedConfigTables();
 }
 
+// 初始化首个数据源和模块元数据，让全新安装后能直接打开主要页面。
 async function seedConfigTables() {
   const dsCount = await get<{ total: number }>('SELECT COUNT(*) as total FROM data_source_instances');
   if (!dsCount?.total) {
@@ -698,6 +711,7 @@ export async function listUsers() {
   `);
 }
 
+// 保存用户默认数据源；认证中间件据此识别已失效的会话。
 function saveUserDataSourcePreference(userId: number, defaultDataSourceId?: number | null) {
   if (defaultDataSourceId) {
     run(
@@ -876,6 +890,10 @@ export async function listDataSourceStaffOptions(dataSourceId: number) {
   return options;
 }
 
+/**
+ * 根据设置页提交内容重写某个数据源的人员分配。
+ * 一个成员可承担多个角色，因此前端载荷会展开为按角色存储的数据库记录。
+ */
 export async function replaceDataSourceStaffAssignments(dataSourceId: number, members: StaffMemberInput[]) {
   await withPersistenceBatch(() => {
     run('DELETE FROM data_source_staff_assignments WHERE data_source_id = ?', [dataSourceId]);
@@ -972,6 +990,10 @@ function normalizePermission(row: ModulePermissionRecord | undefined, fallback: 
   };
 }
 
+/**
+ * 在角色默认权限上叠加用户专属规则，得到最终模块权限。
+ * 缺少权限记录时，按模块启用和可编辑状态回退到保守默认值。
+ */
 export async function getModulePermission(input: {
   userId: number;
   role: UserRole;
@@ -1047,6 +1069,10 @@ async function findReusableIdentity(member: EnterpriseMemberInput) {
   return undefined;
 }
 
+/**
+ * 把企业身份关联到本地用户，必要时创建本地账号。
+ * 匹配时优先使用平台身份 ID，其次使用企业通讯录提供的可复用联系方式。
+ */
 export async function upsertOAuthUser(input: {
   provider: IdentityProvider;
   providerUserId: string;
@@ -1132,6 +1158,9 @@ export async function upsertOAuthUser(input: {
   }
 }
 
+/**
+ * 批量导入企业通讯录成员，并保持身份记录与本地账号同步。
+ */
 export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) {
   let created = 0;
   let updated = 0;
@@ -1251,6 +1280,7 @@ export async function addAuditLog(input: {
   ]);
 }
 
+// 表格读取按数据源和模块维度缓存，减少外部 API 调用。
 export async function getSheetCache<T>(cacheKey: string) {
   const row = await get<{ payload_json: string; updated_at: string }>('SELECT payload_json, updated_at FROM sheet_cache WHERE cache_key = ?', [cacheKey]);
   if (!row) return undefined;
@@ -1331,6 +1361,7 @@ async function scalarCount(sql: string, params: unknown[] = []) {
   return (await get<{ total: number }>(sql, params))?.total || 0;
 }
 
+// 聚合 API 使用计数，供管理员观测组件展示。
 export async function getApiUsageSummary(platform = 'dingtalk'): Promise<ApiUsageSummary> {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
@@ -1364,6 +1395,7 @@ export async function getApiUsageSummary(platform = 'dingtalk'): Promise<ApiUsag
   };
 }
 
+// 把持久化的 JSON 载荷转换回客户端和同步服务需要的行结构。
 function normalizeLocalRow(row: any): LocalModuleRow | undefined {
   if (!row) return undefined;
   try {
@@ -1537,6 +1569,7 @@ export function finishSyncJob(input: { id: number; status: 'success' | 'failed';
   );
 }
 
+// 重启后把遗留的运行中同步任务标记为失败，避免界面永久显示运行中。
 export function failStaleRunningSyncJobs(minutes = 30) {
   run(
     `UPDATE sync_jobs

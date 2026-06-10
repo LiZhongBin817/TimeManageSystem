@@ -1,3 +1,6 @@
+/**
+ * 通知服务：保存配置、生成看板 Markdown、签名 webhook、发送消息并记录日志。
+ */
 import axios from 'axios';
 import crypto from 'crypto';
 import http from 'http';
@@ -41,6 +44,19 @@ const NOTIFICATION_REQUEST_RETRIES = Number(process.env.NOTIFICATION_REQUEST_RET
 const notificationHttpAgent = new http.Agent({ family: 4 });
 const notificationHttpsAgent = new https.Agent({ family: 4 });
 
+function firstEnvValue(...keys: string[]) {
+  return keys.map((key) => process.env[key]).find((value) => String(value || '').trim())?.trim() || '';
+}
+
+function envNotificationDefaults() {
+  return {
+    enabled: firstEnvValue('NOTIFICATION_ENABLED', 'DINGTALK_ROBOT_ENABLED') === 'true',
+    webhookUrl: firstEnvValue('DINGTALK_ROBOT_WEBHOOK_URL', 'NOTIFICATION_WEBHOOK_URL'),
+    secret: firstEnvValue('DINGTALK_ROBOT_SECRET', 'NOTIFICATION_SECRET'),
+    scheduledTime: firstEnvValue('NOTIFICATION_SCHEDULED_TIME', 'DINGTALK_ROBOT_SCHEDULED_TIME') || '09:00'
+  };
+}
+
 function isTransientNotificationError(error: any) {
   const status = error?.response?.status;
   const code = String(error?.code || '');
@@ -51,6 +67,7 @@ function isTransientNotificationError(error: any) {
     || message.includes('network');
 }
 
+// Webhook 发送会重试临时网络/平台故障，但永久错误会立即抛出。
 async function withRetry<T>(request: () => Promise<T>, attempts = NOTIFICATION_REQUEST_RETRIES) {
   let lastError: unknown;
   for (let index = 0; index < attempts; index += 1) {
@@ -76,12 +93,16 @@ function parseKeywords(value?: string) {
 }
 
 function normalizeSettings(row?: NotificationSettingsRow): NotificationSettings {
+  const envDefaults = envNotificationDefaults();
+  const webhookUrl = row?.webhook_url || envDefaults.webhookUrl;
+  const secret = row?.secret || envDefaults.secret;
+
   return {
-    enabled: Boolean(row?.enabled),
-    webhookUrl: row?.webhook_url || '',
-    secret: row?.secret || '',
+    enabled: Boolean(row?.enabled) || envDefaults.enabled,
+    webhookUrl,
+    secret,
     keywords: parseKeywords(row?.keyword_json),
-    scheduledTime: row?.scheduled_time || '09:00',
+    scheduledTime: row?.scheduled_time || envDefaults.scheduledTime,
     lastScheduledDate: row?.last_scheduled_date || ''
   };
 }
@@ -124,6 +145,10 @@ export async function saveNotificationUserSettings(userId: number, input: Notifi
 }
 
 export async function saveNotificationSettings(input: NotificationSettings) {
+  const existing = await getNotificationSettings();
+  const webhookUrl = String(input.webhookUrl || '').trim() || existing.webhookUrl;
+  const secret = String(input.secret || '').trim() || existing.secret;
+
   run(
     `INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time, updated_at)
      VALUES (1, 'dingtalk_robot', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -142,8 +167,8 @@ export async function saveNotificationSettings(input: NotificationSettings) {
        updated_at = CURRENT_TIMESTAMP`,
     [
       input.enabled ? 1 : 0,
-      input.webhookUrl || '',
-      input.secret || '',
+      webhookUrl,
+      secret,
       JSON.stringify((input.keywords || []).map((item) => item.trim()).filter(Boolean)),
       input.scheduledTime || '09:00'
     ]
@@ -222,6 +247,7 @@ function itemLine(item: ScheduleItem, index: number) {
   ].join('\n   ');
 }
 
+// 把看板摘要格式化为钉钉 Markdown，用紧凑分区支持每日查看。
 export function buildDashboardMarkdown(summary: Awaited<ReturnType<typeof buildDashboardSummary>>) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const developingItems = summary.inProgress.developingItems as ScheduleItem[];
@@ -257,6 +283,7 @@ function withKeywords(markdown: string, keywords: string[]) {
   return [`关键词：${uniqueKeywords.join('、')}`, '', markdown].join('\n');
 }
 
+// 配置密钥时先应用钉钉机器人签名，再发送 Markdown 载荷。
 async function sendDingTalkMarkdown(settings: NotificationSettings, title: string, markdown: string) {
   if (!settings.webhookUrl) throw new Error('请先配置钉钉机器人 Webhook');
   const url = signWebhook(settings.webhookUrl, settings.secret);

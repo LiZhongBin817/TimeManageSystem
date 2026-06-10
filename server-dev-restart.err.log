@@ -1,0 +1,37 @@
+Error: 请先配置钉钉机器人 Webhook
+    at sendDingTalkMarkdown (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:267:35)
+    at pushDashboardNotification (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:338:26)
+    at processTicksAndRejections (node:internal/process/task_queues:96:5)
+    at D:\学习项目\TimeManageSystem\server\src\routes.ts:849:14
+Error: 请先配置钉钉机器人 Webhook
+    at sendDingTalkMarkdown (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:267:35)
+    at pushDashboardNotification (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:338:26)
+    at processTicksAndRejections (node:internal/process/task_queues:96:5)
+    at D:\学习项目\TimeManageSystem\server\src\routes.ts:849:14
+Error: 请先配置钉钉机器人 Webhook
+    at sendDingTalkMarkdown (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:267:35)
+    at pushDashboardNotification (D:\学习项目\TimeManageSystem\server\src\services\notification.ts:338:26)
+    at processTicksAndRejections (node:internal/process/task_queues:96:5)
+    at D:\学习项目\TimeManageSystem\server\src\routes.ts:849:14
+TypeError: Router.use() requires a middleware function but got a undefined
+    at Function.use (D:\学习项目\TimeManageSystem\node_modules\express\lib\router\index.js:469:13)
+    at Function.<anonymous> (D:\学习项目\TimeManageSystem\node_modules\express\lib\application.js:227:21)
+    at Array.forEach (<anonymous>)
+    at Function.use (D:\学习项目\TimeManageSystem\node_modules\express\lib\application.js:224:7)
+    at Object.<anonymous> (D:\学习项目\TimeManageSystem\server\src\index.ts:33:5)
+    at Module._compile (node:internal/modules/cjs/loader:1155:14)
+    at Module._compile (D:\学习项目\TimeManageSystem\node_modules\source-map-support\source-map-support.js:568:25)
+    at Module.m._compile (C:\Users\李忠斌\AppData\Local\Temp\ts-node-dev-hook-08519544488709552.js:69:33)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1209:10)
+    at require.extensions..jsx.require.extensions..js (C:\Users\李忠斌\AppData\Local\Temp\ts-node-dev-hook-08519544488709552.js:114:20)
+TypeError: Router.use() requires a middleware function but got a undefined
+    at Function.use (D:\学习项目\TimeManageSystem\node_modules\express\lib\router\index.js:469:13)
+    at Function.<anonymous> (D:\学习项目\TimeManageSystem\node_modules\express\lib\application.js:227:21)
+    at Array.forEach (<anonymous>)
+    at Function.use (D:\学习项目\TimeManageSystem\node_modules\express\lib\application.js:224:7)
+    at Object.<anonymous> (D:\学习项目\TimeManageSystem\server\src\index.ts:33:5)
+    at Module._compile (node:internal/modules/cjs/loader:1155:14)
+    at Module._compile (D:\学习项目\TimeManageSystem\node_modules\source-map-support\source-map-support.js:568:25)
+    at Module.m._compile (C:\Users\李忠斌\AppData\Local\Temp\ts-node-dev-hook-08519544488709552.js:69:33)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1209:10)
+    at require.extensions..jsx.require.extensions..js (C:\Users\李忠斌\AppData\Local\Temp\ts-node-dev-hook-08519544488709552.js:114:20)

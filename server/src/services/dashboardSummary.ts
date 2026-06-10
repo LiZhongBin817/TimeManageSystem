@@ -1,3 +1,6 @@
+/**
+ * 看板聚合服务：读取项目模块，生成进度、排期和研发人员统计。
+ */
 import { AuthUser } from '../auth';
 import { ModuleConfig, listModules } from '../config/modules';
 import { getModulePermission } from '../db';
@@ -58,6 +61,9 @@ async function getClientForModule(module: ModuleConfig, user: AuthUser) {
   return getDataSourceClient(moduleDataSourceId(module, user.dataSourceId), user);
 }
 
+/**
+ * 根据实时模块行生成看板载荷：总数、进行中排期、研发汇总和趋势数据。
+ */
 export async function buildDashboardSummary(user: AuthUser) {
   const projectModules = await readableProjectModules(user);
   const moduleStats: Array<{
