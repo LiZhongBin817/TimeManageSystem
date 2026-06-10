@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import path from 'path';
+import { pinyin } from 'pinyin-pro';
 import initSqlJs, { Database } from 'sql.js';
 
 export type UserRole = 'admin' | 'editor' | 'viewer';
@@ -9,6 +10,7 @@ export type IdentityProvider = 'dingtalk' | 'feishu';
 export interface UserRecord {
   id: number;
   username: string;
+  login_name?: string | null;
   password_hash?: string | null;
   role: UserRole;
   display_name: string;
@@ -132,6 +134,7 @@ const dbPath = process.env.DB_PATH
 let db: Database;
 let batchDepth = 0;
 let batchDirty = false;
+const defaultUserPassword = process.env.DEFAULT_USER_PASSWORD || '123456';
 
 function persist() {
   const data = db.export();
@@ -188,6 +191,58 @@ async function ensureColumn(table: string, column: string, definition: string) {
   }
 }
 
+function normalizeLoginName(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function loginNameBaseFromDisplayName(displayName?: string | null) {
+  const name = String(displayName || '').trim();
+  if (!name) return '';
+  try {
+    const raw = pinyin(name, { toneType: 'none', type: 'array' }).join('');
+    return raw.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 50);
+  } catch {
+    return '';
+  }
+}
+
+async function nextAvailableLoginName(base: string, used = new Set<string>()) {
+  const cleanBase = normalizeLoginName(base).replace(/[^a-z0-9_.-]/g, '').slice(0, 50);
+  if (!cleanBase) return '';
+  let candidate = cleanBase;
+  let suffix = 2;
+  while (used.has(candidate) || await get<{ id: number }>('SELECT id FROM users WHERE login_name = ?', [candidate])) {
+    const suffixText = String(suffix);
+    candidate = `${cleanBase.slice(0, 50 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+async function backfillUserLoginNames() {
+  const users = await all<UserRecord>('SELECT * FROM users ORDER BY id');
+  const used = new Set(users.map((user) => normalizeLoginName(String(user.login_name || ''))).filter(Boolean));
+  for (const user of users) {
+    if (String(user.login_name || '').trim()) continue;
+    const isBuiltIn = ['admin', 'editor', 'viewer'].includes(user.username);
+    const base = isBuiltIn ? user.username : loginNameBaseFromDisplayName(user.display_name);
+    const loginName = await nextAvailableLoginName(base, used);
+    if (loginName) {
+      run('UPDATE users SET login_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [loginName, user.id]);
+    }
+  }
+}
+
+async function backfillDefaultPasswords() {
+  const usersWithoutPassword = await all<{ id: number }>('SELECT id FROM users WHERE password_hash IS NULL OR password_hash = \'\'');
+  if (!usersWithoutPassword.length) return;
+  const hash = bcrypt.hashSync(defaultUserPassword, 10);
+  for (const user of usersWithoutPassword) {
+    run('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hash, user.id]);
+  }
+}
+
 export async function initDatabase() {
   const SQL = await initSqlJs();
   db = fs.existsSync(dbPath) ? new SQL.Database(fs.readFileSync(dbPath)) : new SQL.Database();
@@ -196,6 +251,7 @@ export async function initDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
+      login_name TEXT,
       password_hash TEXT,
       role TEXT NOT NULL,
       display_name TEXT NOT NULL,
@@ -205,9 +261,13 @@ export async function initDatabase() {
     )
   `);
 
+  await ensureColumn('users', 'login_name', 'TEXT');
   await ensureColumn('users', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
   await ensureColumn('users', 'updated_at', 'TEXT');
   run("UPDATE users SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)");
+  await backfillUserLoginNames();
+  await backfillDefaultPasswords();
+  run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_name_unique ON users(login_name) WHERE login_name IS NOT NULL');
 
   run(`
     CREATE TABLE IF NOT EXISTS user_identities (
@@ -482,7 +542,8 @@ export async function initDatabase() {
     ];
 
     for (const [username, password, role, displayName] of users) {
-      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+      run('INSERT INTO users (username, login_name, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?, ?)', [
+        username,
         username,
         bcrypt.hashSync(password, 10),
         role,
@@ -499,12 +560,14 @@ export async function initDatabase() {
     if (existingAdmin) {
       run(
         `UPDATE users
-         SET password_hash = ?, role = 'admin', display_name = COALESCE(NULLIF(display_name, ''), '管理员'), enabled = 1, updated_at = CURRENT_TIMESTAMP
+         SET login_name = COALESCE(NULLIF(login_name, ''), 'admin'),
+             password_hash = ?, role = 'admin', display_name = COALESCE(NULLIF(display_name, ''), '管理员'), enabled = 1, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         [fallbackPassword, existingAdmin.id]
       );
     } else {
-      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+      run('INSERT INTO users (username, login_name, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?, ?)', [
+        'admin',
         'admin',
         fallbackPassword,
         'admin',
@@ -596,6 +659,23 @@ export async function findUserByUsername(username: string) {
   return get<UserRecord>('SELECT * FROM users WHERE username = ?', [username]);
 }
 
+export async function findUserByLoginName(loginName: string) {
+  return get<UserRecord>('SELECT * FROM users WHERE login_name = ?', [normalizeLoginName(loginName)]);
+}
+
+export async function findUserByLoginNameOrUsername(account: string) {
+  const clean = normalizeLoginName(account);
+  return get<UserRecord>(
+    'SELECT * FROM users WHERE login_name = ? OR username = ? ORDER BY CASE WHEN login_name = ? THEN 0 ELSE 1 END LIMIT 1',
+    [clean, account, clean]
+  );
+}
+
+export async function isLoginNameAvailable(loginName: string, exceptUserId?: number) {
+  const existing = await findUserByLoginName(loginName);
+  return !existing || existing.id === exceptUserId;
+}
+
 export async function findUserById(id: number) {
   return get<UserRecord>('SELECT * FROM users WHERE id = ?', [id]);
 }
@@ -635,21 +715,25 @@ function saveUserDataSourcePreference(userId: number, defaultDataSourceId?: numb
 }
 
 export async function createLocalUser(input: {
-  username: string;
+  loginName: string;
+  username?: string;
   password: string;
   displayName: string;
   role: UserRole;
   enabled: boolean;
   defaultDataSourceId?: number | null;
 }) {
-  run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
-    input.username,
+  const loginName = normalizeLoginName(input.loginName);
+  const username = String(input.username || loginName).trim();
+  run('INSERT INTO users (username, login_name, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?, ?)', [
+    username,
+    loginName,
     bcrypt.hashSync(input.password, 10),
     input.role,
     input.displayName,
     input.enabled ? 1 : 0
   ]);
-  const user = await findUserByUsername(input.username);
+  const user = await findUserByLoginName(loginName);
   if (!user) throw new Error('用户创建后未找到');
   saveUserDataSourcePreference(user.id, input.defaultDataSourceId);
   return findUserById(user.id);
@@ -657,22 +741,29 @@ export async function createLocalUser(input: {
 
 export async function updateUser(input: {
   id: number;
+  loginName?: string | null;
   displayName: string;
   role: UserRole;
   enabled: boolean;
   defaultDataSourceId?: number | null;
   newPassword?: string;
+  resetPassword?: boolean;
 }) {
-  if (input.newPassword) {
-    run('UPDATE users SET display_name = ?, role = ?, enabled = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+  const loginName = input.loginName === undefined ? undefined : normalizeLoginName(String(input.loginName || ''));
+  const loginNameParam = loginName === undefined ? null : (loginName || null);
+  const passwordToSet = input.newPassword || (input.resetPassword ? defaultUserPassword : undefined);
+  if (passwordToSet) {
+    run('UPDATE users SET login_name = COALESCE(?, login_name), display_name = ?, role = ?, enabled = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+      loginNameParam,
       input.displayName,
       input.role,
       input.enabled ? 1 : 0,
-      bcrypt.hashSync(input.newPassword, 10),
+      bcrypt.hashSync(passwordToSet, 10),
       input.id
     ]);
   } else {
-    run('UPDATE users SET display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+    run('UPDATE users SET login_name = COALESCE(?, login_name), display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+      loginNameParam,
       input.displayName,
       input.role,
       input.enabled ? 1 : 0,
@@ -990,6 +1081,13 @@ export async function upsertOAuthUser(input: {
         identity.id
       ]
     );
+    if (linkedUser && !linkedUser.password_hash) {
+      run('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+        bcrypt.hashSync(defaultUserPassword, 10),
+        linkedUser.id
+      ]);
+      linkedUser = await findUserById(linkedUser.id);
+    }
     return linkedUser || findUserById(identity.user_id);
   }
 
@@ -1000,11 +1098,13 @@ export async function upsertOAuthUser(input: {
     username = `${baseUsername}_${suffix}`;
     suffix += 1;
   }
+  const loginName = await nextAvailableLoginName(loginNameBaseFromDisplayName(input.name));
 
   try {
-    run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+    run('INSERT INTO users (username, login_name, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?, ?)', [
       username,
-      null,
+      loginName || null,
+      bcrypt.hashSync(defaultUserPassword, 10),
       'viewer',
       input.name || username,
       1
@@ -1054,7 +1154,10 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
             existing.id
           ]
         );
-        run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+        const loginName = await nextAvailableLoginName(loginNameBaseFromDisplayName(member.name));
+        run('UPDATE users SET login_name = COALESCE(NULLIF(login_name, \'\'), ?), password_hash = COALESCE(password_hash, ?), display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+          loginName || null,
+          bcrypt.hashSync(defaultUserPassword, 10),
           member.name,
           existing.user_id
         ]);
@@ -1082,7 +1185,10 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
             member.raw ? JSON.stringify(member.raw) : null
           ]
         );
-        run('UPDATE users SET display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+        const loginName = await nextAvailableLoginName(loginNameBaseFromDisplayName(member.name));
+        run('UPDATE users SET login_name = COALESCE(NULLIF(login_name, \'\'), ?), password_hash = COALESCE(password_hash, ?), display_name = COALESCE(NULLIF(?, \'\'), display_name), updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+          loginName || null,
+          bcrypt.hashSync(defaultUserPassword, 10),
           member.name,
           existingUserByName.id
         ]);
@@ -1093,10 +1199,12 @@ export async function upsertEnterpriseMembers(members: EnterpriseMemberInput[]) 
         username = `${baseUsername}_${suffix}`;
         suffix += 1;
       }
+      const loginName = await nextAvailableLoginName(loginNameBaseFromDisplayName(member.name));
 
-      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+      run('INSERT INTO users (username, login_name, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?, ?)', [
         username,
-        null,
+        loginName || null,
+        bcrypt.hashSync(defaultUserPassword, 10),
         'viewer',
         member.name || username,
         1
@@ -1227,7 +1335,7 @@ export async function getApiUsageSummary(platform = 'dingtalk'): Promise<ApiUsag
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
   const month = now.toISOString().slice(0, 7);
-  const monthlyWarnLimit = Number(process.env.DINGTALK_API_MONTHLY_WARN_LIMIT || 7000);
+  const monthlyWarnLimit = Number(process.env.DINGTALK_API_MONTHLY_WARN_LIMIT || 5000);
   const [todayCalls, monthCalls, todayFailures, monthFailures, todayTimeouts, monthTimeouts, todayCacheHits, monthCacheHits] = await Promise.all([
     scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 0 AND date(created_at) = date(?)", [platform, today]),
     scalarCount("SELECT COUNT(*) as total FROM api_call_logs WHERE platform = ? AND cache_hit = 0 AND substr(created_at, 1, 7) = ?", [platform, month]),

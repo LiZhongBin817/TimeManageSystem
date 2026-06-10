@@ -2,13 +2,14 @@ import bcrypt from 'bcryptjs';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { Role, getDataSource } from './config/modules';
-import { IdentityProvider, UserRecord, findUserById, findUserByUsername, getUserDataSourcePreference, upsertOAuthUser } from './db';
+import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, upsertOAuthUser } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
 
 export interface AuthUser {
   id: number;
   username: string;
+  loginName?: string;
   role: Role;
   displayName: string;
   dataSourceId: number;
@@ -43,6 +44,7 @@ async function buildSession(user: UserRecord, dataSourceId: number, provider: Au
   const payload: AuthUser = {
     id: user.id,
     username: user.username,
+    loginName: user.login_name || undefined,
     role: user.role,
     displayName: user.display_name,
     dataSourceId: dataSource.id,
@@ -58,7 +60,7 @@ async function buildSession(user: UserRecord, dataSourceId: number, provider: Au
 }
 
 export async function login(username: string, password: string, dataSourceId: number) {
-  const user = await findUserByUsername(username);
+  const user = await findUserByLoginNameOrUsername(username);
   if (!user || !user.password_hash || !bcrypt.compareSync(password, user.password_hash)) {
     return null;
   }
@@ -136,6 +138,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     req.user = {
       ...tokenUser,
       username: user.username,
+      loginName: user.login_name || undefined,
       role: user.role,
       displayName: user.display_name,
       platform: tokenDataSource.platform,

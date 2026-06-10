@@ -123,7 +123,7 @@ onMounted(async () => {
 
         <template v-if="loginMode === 'local'">
           <el-form-item>
-            <el-input v-model="form.username" size="large" placeholder="用户名" :prefix-icon="User" />
+            <el-input v-model="form.username" size="large" placeholder="登录账号" :prefix-icon="User" />
           </el-form-item>
           <el-form-item>
             <el-input v-model="form.password" size="large" placeholder="密码" type="password" :prefix-icon="Lock" show-password />

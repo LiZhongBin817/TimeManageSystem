@@ -118,8 +118,38 @@ function publicBaseUrl() {
   return process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL || 'http://localhost:4000';
 }
 
+function normalizePublicBaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  try {
+    const url = new URL(trimmed);
+    url.pathname = url.pathname
+      .replace(/\/api\/auth\/oauth$/, '')
+      .replace(/\/api\/auth$/, '')
+      .replace(/\/api$/, '');
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed
+      .replace(/\/api\/auth\/oauth$/, '')
+      .replace(/\/api\/auth$/, '')
+      .replace(/\/api$/, '');
+  }
+}
+
+function normalizeCallbackUri(value: string, provider: IdentityProvider) {
+  const callbackPath = `/api/auth/oauth/${provider}/callback`;
+  const duplicatePattern = new RegExp(`/api/auth/oauth(?:/(?:api/auth/oauth|oauth))+/${provider}/callback$`);
+  try {
+    const url = new URL(value.trim());
+    url.pathname = url.pathname.replace(duplicatePattern, callbackPath);
+    return url.toString();
+  } catch {
+    return value.trim().replace(duplicatePattern, callbackPath);
+  }
+}
+
 export function callbackUri(provider: IdentityProvider, dataSource: DataSourceInstance) {
-  return dataSource.config.redirectUri || `${publicBaseUrl()}/api/auth/oauth/${provider}/callback`;
+  const redirectUri = dataSource.config.redirectUri || `${normalizePublicBaseUrl(publicBaseUrl())}/api/auth/oauth/${provider}/callback`;
+  return normalizeCallbackUri(redirectUri, provider);
 }
 
 export function frontendCallbackUrl(token: string) {

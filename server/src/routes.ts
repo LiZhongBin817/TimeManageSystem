@@ -21,13 +21,14 @@ import {
   copyDataSourceStaffAssignments,
   countDataSourceStaffAssignments,
   createLocalUser,
-  findUserByUsername,
+  findUserByLoginNameOrUsername,
   getModulePermission,
   getApiUsageSummary,
   getDingTalkSyncSettings,
   getSyncOverview,
   invalidateSheetCache,
   importStaffOptionsToAssignments,
+  isLoginNameAvailable,
   listDataSourceStaffMembers,
   listDataSourceStaffOptions,
   listModulePermissions,
@@ -76,6 +77,7 @@ function serializeUser(user: any) {
   return {
     id: user.id,
     username: user.username,
+    loginName: user.login_name || '',
     displayName: user.display_name,
     role: user.role,
     enabled: Boolean(user.enabled),
@@ -96,17 +98,20 @@ const loginSchema = z.object({
 });
 
 const userSchema = z.object({
+  loginName: z.string().trim().min(3).max(50).regex(/^[A-Za-z0-9_.-]+$/).optional(),
   displayName: z.string().min(1),
   role: z.enum(['admin', 'editor', 'viewer']),
   enabled: z.boolean(),
   defaultDataSourceId: z.number().int().positive().nullable().optional(),
-  newPassword: z.string().max(64).optional()
+  newPassword: z.string().max(64).optional(),
+  resetPassword: z.boolean().optional()
 });
 
 const usernameSchema = z.string().trim().min(3).max(50).regex(/^[A-Za-z0-9_.-]+$/);
 
 const createUserSchema = z.object({
-  username: usernameSchema,
+  loginName: usernameSchema.optional(),
+  username: usernameSchema.optional(),
   password: z.string().min(6).max(64),
   displayName: z.string().min(1),
   role: z.enum(['admin', 'editor', 'viewer']),
@@ -336,6 +341,7 @@ router.get('/auth/oauth/:provider/callback', async (req, res) => {
     const provider = req.params.provider as 'dingtalk' | 'feishu';
     const code = String(req.query.code || '');
     const state = String(req.query.state || '');
+    console.log(`[oauth-callback] received provider=${provider} code=${code ? 'yes' : 'no'} state=${state ? 'yes' : 'no'}`);
     if (!code || !state) throw new Error('OAuth 回调缺少授权码或 state');
     const payload = verifyOAuthState(state);
     if (payload.provider !== provider) throw new Error('OAuth state 与登录平台不匹配');
@@ -471,15 +477,20 @@ router.post('/users', async (req, res, next) => {
     }
     const parsed = createUserSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: '用户信息不完整，用户名需为 3-50 位字母、数字、下划线、点或短横线，密码至少 6 位' });
+      res.status(400).json({ message: '用户信息不完整，登录账号需为 3-50 位字母、数字、下划线、点或短横线，密码至少 6 位' });
       return;
     }
-    const existing = await findUserByUsername(parsed.data.username);
+    const loginName = parsed.data.loginName || parsed.data.username || '';
+    if (!loginName) {
+      res.status(400).json({ message: '登录账号不能为空' });
+      return;
+    }
+    const existing = await findUserByLoginNameOrUsername(loginName);
     if (existing) {
-      res.status(409).json({ message: '登录标识已存在，请换一个用户名' });
+      res.status(409).json({ message: '登录账号已存在，请换一个' });
       return;
     }
-    const created = await createLocalUser(parsed.data);
+    const created = await createLocalUser({ ...parsed.data, loginName });
     const users = await listUsers();
     const user = users.find((item) => item.id === created?.id) || created;
     res.status(201).json({ user: serializeUser(user) });
@@ -515,12 +526,21 @@ router.put('/users/:id', async (req, res, next) => {
       res.status(400).json({ message: '至少需要保留一个启用的管理员账号，避免无法管理权限' });
       return;
     }
+    if (parsed.data.loginName && !(await isLoginNameAvailable(parsed.data.loginName, targetId))) {
+      res.status(409).json({ message: '登录账号已存在，请换一个' });
+      return;
+    }
     const nextPassword = parsed.data.newPassword?.trim() ? parsed.data.newPassword : undefined;
     if (nextPassword && nextPassword.length < 6) {
       res.status(400).json({ message: '新密码至少 6 位' });
       return;
     }
-    const user = await updateUser({ id: targetId, ...parsed.data, newPassword: nextPassword });
+    const user = await updateUser({
+      id: targetId,
+      ...parsed.data,
+      newPassword: nextPassword,
+      resetPassword: !nextPassword && Boolean(parsed.data.resetPassword)
+    });
     const usersAfterUpdate = await listUsers();
     const refreshed = usersAfterUpdate.find((item) => item.id === user?.id) || user;
     res.json({ user: serializeUser(refreshed) });

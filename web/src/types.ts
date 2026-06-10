@@ -18,6 +18,7 @@ export interface User {
 export interface ManagedUser {
   id: number;
   username: string;
+  loginName?: string;
   displayName: string;
   role: Role;
   enabled: boolean;
@@ -31,7 +32,8 @@ export interface ManagedUser {
 }
 
 export interface CreateManagedUserPayload {
-  username: string;
+  loginName: string;
+  username?: string;
   password: string;
   displayName: string;
   role: Role;
@@ -41,11 +43,13 @@ export interface CreateManagedUserPayload {
 
 export interface UpdateManagedUserPayload {
   id: number;
+  loginName?: string;
   displayName: string;
   role: Role;
   enabled: boolean;
   defaultDataSourceId?: number | null;
   newPassword?: string;
+  resetPassword?: boolean;
 }
 
 export interface DataSourcePlatform {

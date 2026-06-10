@@ -1,0 +1,9 @@
+
+> server@0.1.0 dev
+> ts-node-dev --respawn --transpile-only src/index.ts
+
+[INFO] 11:15:12 ts-node-dev ver. 2.0.0 (using ts-node ver. 10.9.2, typescript ver. 5.2.2)
+[dingtalk-sync] scheduler started
+[notification-scheduler] started
+API server listening on http://localhost:4000
+[dingtalk-sync] starting startup

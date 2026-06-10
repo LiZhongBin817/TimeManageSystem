@@ -57,6 +57,7 @@ type UserDialogMode = 'create' | 'edit';
 interface UserFormState {
   id: number;
   username: string;
+  loginName: string;
   displayName: string;
   role: Role;
   enabled: boolean;
@@ -264,6 +265,7 @@ function emptyUserForm(): UserFormState {
   return {
     id: 0,
     username: '',
+    loginName: '',
     displayName: '',
     role: 'viewer',
     enabled: true,
@@ -641,6 +643,7 @@ function openUserEdit(row: ManagedUser) {
   Object.assign(userForm, {
     id: row.id,
     username: row.username,
+    loginName: row.loginName || '',
     displayName: row.displayName,
     role: row.role,
     enabled: row.enabled,
@@ -667,12 +670,13 @@ async function submitUser() {
       return;
     }
 
+    const loginName = userForm.loginName.trim();
+    if (!/^[A-Za-z0-9_.-]{3,50}$/.test(loginName)) {
+      ElMessage.warning('登录账号需为 3-50 位字母、数字、下划线、点或短横线');
+      return;
+    }
+
     if (userDialogMode.value === 'create') {
-      const username = userForm.username.trim();
-      if (!/^[A-Za-z0-9_.-]{3,50}$/.test(username)) {
-        ElMessage.warning('登录标识需为 3-50 位字母、数字、下划线、点或短横线');
-        return;
-      }
       if (!userForm.password.trim() || userForm.password.length < 6) {
         ElMessage.warning('初始密码至少 6 位');
         return;
@@ -682,7 +686,7 @@ async function submitUser() {
         return;
       }
       await createManagedUser({
-        username,
+        loginName,
         password: userForm.password,
         displayName,
         role: userForm.role,
@@ -702,6 +706,7 @@ async function submitUser() {
       }
       await updateManagedUser({
         id: userForm.id,
+        loginName,
         displayName,
         role: userForm.role,
         enabled: userForm.enabled,
@@ -709,13 +714,41 @@ async function submitUser() {
         newPassword
       });
       ElMessage.success(newPassword
-        ? '用户已保存，密码已重置。如登录页未显示账号密码登录，请在数据源实例中启用备用登录'
+        ? `用户已保存，密码已修改。请使用登录账号 ${loginName} 和新密码登录`
         : '用户已保存');
     }
     userDialogOpen.value = false;
     load();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '保存失败');
+  }
+}
+
+async function resetUserPassword() {
+  if (userDialogMode.value !== 'edit' || !userForm.id) return;
+  const loginName = userForm.loginName.trim();
+  if (!/^[A-Za-z0-9_.-]{3,50}$/.test(loginName)) {
+    ElMessage.warning('登录账号需为 3-50 位字母、数字、下划线、点或短横线');
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('确认将该用户密码重置为默认密码 123456？', '重置密码', { type: 'warning' });
+    await updateManagedUser({
+      id: userForm.id,
+      loginName,
+      displayName: userForm.displayName.trim(),
+      role: userForm.role,
+      enabled: userForm.enabled,
+      defaultDataSourceId: userForm.defaultDataSourceId,
+      resetPassword: true
+    });
+    ElMessage.success(`密码已重置为默认密码 123456，请使用登录账号 ${loginName} 登录`);
+    userForm.newPassword = '';
+    userForm.confirmNewPassword = '';
+    userDialogOpen.value = false;
+    load();
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '重置密码失败');
   }
 }
 
@@ -799,14 +832,14 @@ onMounted(load);
           </section>
           <section class="compact-kpi-grid">
             <article>
-              <span>今日调用</span>
+              <span>本地今日调用</span>
               <strong>{{ apiUsage?.todayCalls || 0 }}</strong>
               <small>缓存命中 {{ apiUsage?.todayCacheHits || 0 }}</small>
             </article>
             <article>
-              <span>本月调用</span>
+              <span>本地本月调用</span>
               <strong>{{ apiUsage?.monthCalls || 0 }}</strong>
-              <small>预警阈值 {{ apiUsage?.monthlyWarnLimit || 0 }}</small>
+              <small>本月额度 {{ apiUsage?.monthlyWarnLimit || 0 }}，每月重置</small>
             </article>
             <article>
               <span>失败次数</span>
@@ -988,7 +1021,16 @@ onMounted(load);
           </div>
           <el-table :data="users" stripe>
             <el-table-column prop="displayName" label="显示名称" min-width="150" />
-            <el-table-column prop="username" label="登录标识" min-width="220" />
+            <el-table-column label="登录账号" min-width="180">
+              <template #default="{ row }">{{ row.loginName || '-' }}</template>
+            </el-table-column>
+            <el-table-column label="企业身份" width="130">
+              <template #default="{ row }">
+                <el-tag :type="row.hasEnterpriseLogin ? 'success' : 'info'" size="small">
+                  {{ row.hasEnterpriseLogin ? '已绑定钉钉' : '未绑定' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="role" label="角色" width="110" />
             <el-table-column label="登录方式" width="120">
               <template #default="{ row }">
@@ -1256,12 +1298,9 @@ onMounted(load);
 
     <el-dialog v-model="userDialogOpen" :title="userDialogTitle" width="560px">
       <el-form label-position="top">
-        <el-form-item v-if="userDialogMode === 'create'" label="登录标识" required>
-          <el-input v-model="userForm.username" placeholder="3-50 位字母、数字、下划线、点或短横线" />
-          <div class="field-help">用于账号密码登录，创建后不建议再修改。</div>
-        </el-form-item>
-        <el-form-item v-else label="登录标识">
-          <el-input v-model="userForm.username" disabled />
+        <el-form-item label="登录账号" required>
+          <el-input v-model="userForm.loginName" placeholder="3-50 位字母、数字、下划线、点或短横线" />
+          <div class="field-help">用于账号密码登录，可由管理员修改。</div>
         </el-form-item>
         <el-form-item label="显示名称" required><el-input v-model="userForm.displayName" /></el-form-item>
         <template v-if="userDialogMode === 'create'">
@@ -1287,12 +1326,15 @@ onMounted(load);
         </el-form-item>
         <el-form-item label="启用"><el-switch v-model="userForm.enabled" /></el-form-item>
         <template v-if="userDialogMode === 'edit'">
-          <el-form-item label="重置密码">
+          <el-form-item label="修改密码">
             <el-input v-model="userForm.newPassword" type="password" show-password placeholder="为空则不修改密码" />
-            <div class="field-help">设置后该用户可使用登录标识和新密码登录。</div>
+            <div class="field-help">填写后保存，即可把该用户密码修改为这里输入的新密码。</div>
           </el-form-item>
           <el-form-item v-if="userForm.newPassword" label="确认新密码">
             <el-input v-model="userForm.confirmNewPassword" type="password" show-password placeholder="再次输入新密码" />
+          </el-form-item>
+          <el-form-item label="重置密码">
+            <el-button type="warning" plain @click="resetUserPassword">重置为默认密码 123456</el-button>
           </el-form-item>
         </template>
       </el-form>
