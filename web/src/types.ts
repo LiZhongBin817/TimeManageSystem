@@ -23,8 +23,29 @@ export interface ManagedUser {
   enabled: boolean;
   defaultDataSourceId?: number | null;
   defaultDataSourceName?: string;
+  hasLocalLogin?: boolean;
+  hasEnterpriseLogin?: boolean;
+  loginMethod?: 'local' | 'enterprise' | 'both' | 'none';
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface CreateManagedUserPayload {
+  username: string;
+  password: string;
+  displayName: string;
+  role: Role;
+  enabled: boolean;
+  defaultDataSourceId?: number | null;
+}
+
+export interface UpdateManagedUserPayload {
+  id: number;
+  displayName: string;
+  role: Role;
+  enabled: boolean;
+  defaultDataSourceId?: number | null;
+  newPassword?: string;
 }
 
 export interface DataSourcePlatform {

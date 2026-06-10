@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  CreateManagedUserPayload,
   DataSourceInstance,
   DataSourcePlatform,
   ManagedUser,
@@ -17,6 +18,7 @@ import type {
   SyncOverview,
   StaffMember,
   StaffMembersResponse,
+  UpdateManagedUserPayload,
   User
 } from './types';
 
@@ -250,7 +252,12 @@ export async function getUsers() {
   return data.users;
 }
 
-export async function updateManagedUser(user: Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'enabled' | 'defaultDataSourceId'>) {
+export async function createManagedUser(user: CreateManagedUserPayload) {
+  const { data } = await api.post<{ user: ManagedUser }>('/users', user);
+  return data.user;
+}
+
+export async function updateManagedUser(user: UpdateManagedUserPayload) {
   const { data } = await api.put<{ user: ManagedUser }>(`/users/${user.id}`, user);
   return data.user;
 }

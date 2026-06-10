@@ -4,7 +4,7 @@ import https from 'https';
 import { DataSourceInstance } from '../config/configStore';
 import { IdentityProvider } from '../db';
 
-const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 15000);
+const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 20000);
 const oauthHttpAgent = new http.Agent({ family: 4 });
 const oauthHttpsAgent = new https.Agent({ family: 4 });
 

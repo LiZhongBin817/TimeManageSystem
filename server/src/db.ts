@@ -17,6 +17,7 @@ export interface UserRecord {
   updated_at?: string;
   default_data_source_id?: number | null;
   default_data_source_name?: string | null;
+  identity_count?: number;
 }
 
 export interface UserIdentityRecord {
@@ -491,6 +492,29 @@ export async function initDatabase() {
     }
   }
 
+  const enabledAdmin = await get<{ total: number }>("SELECT COUNT(*) as total FROM users WHERE role = 'admin' AND enabled = 1");
+  if (!enabledAdmin?.total) {
+    const fallbackPassword = bcrypt.hashSync('admin123', 10);
+    const existingAdmin = await get<UserRecord>('SELECT * FROM users WHERE username = ?', ['admin']);
+    if (existingAdmin) {
+      run(
+        `UPDATE users
+         SET password_hash = ?, role = 'admin', display_name = COALESCE(NULLIF(display_name, ''), '管理员'), enabled = 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [fallbackPassword, existingAdmin.id]
+      );
+    } else {
+      run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+        'admin',
+        fallbackPassword,
+        'admin',
+        '管理员',
+        1
+      ]);
+    }
+    console.warn('[auth] 没有启用的管理员账号，已恢复默认管理员 admin/admin123。请登录后立即修改密码。');
+  }
+
   await seedConfigTables();
 }
 
@@ -581,7 +605,12 @@ export async function listUsers() {
     SELECT
       u.*,
       p.data_source_id as default_data_source_id,
-      d.name as default_data_source_name
+      d.name as default_data_source_name,
+      (
+        SELECT COUNT(*)
+        FROM user_identities i
+        WHERE i.user_id = u.id
+      ) as identity_count
     FROM users u
     LEFT JOIN user_data_source_preferences p ON p.user_id = u.id
     LEFT JOIN data_source_instances d ON d.id = p.data_source_id
@@ -589,14 +618,8 @@ export async function listUsers() {
   `);
 }
 
-export async function updateUser(input: { id: number; displayName: string; role: UserRole; enabled: boolean; defaultDataSourceId?: number | null }) {
-  run('UPDATE users SET display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
-    input.displayName,
-    input.role,
-    input.enabled ? 1 : 0,
-    input.id
-  ]);
-  if (input.defaultDataSourceId) {
+function saveUserDataSourcePreference(userId: number, defaultDataSourceId?: number | null) {
+  if (defaultDataSourceId) {
     run(
       `INSERT INTO user_data_source_preferences (user_id, data_source_id, platform, updated_at)
        SELECT ?, id, platform, CURRENT_TIMESTAMP FROM data_source_instances WHERE id = ?
@@ -604,11 +627,59 @@ export async function updateUser(input: { id: number; displayName: string; role:
          data_source_id = excluded.data_source_id,
          platform = excluded.platform,
          updated_at = CURRENT_TIMESTAMP`,
-      [input.id, input.defaultDataSourceId]
+      [userId, defaultDataSourceId]
     );
   } else {
-    run('DELETE FROM user_data_source_preferences WHERE user_id = ?', [input.id]);
+    run('DELETE FROM user_data_source_preferences WHERE user_id = ?', [userId]);
   }
+}
+
+export async function createLocalUser(input: {
+  username: string;
+  password: string;
+  displayName: string;
+  role: UserRole;
+  enabled: boolean;
+  defaultDataSourceId?: number | null;
+}) {
+  run('INSERT INTO users (username, password_hash, role, display_name, enabled) VALUES (?, ?, ?, ?, ?)', [
+    input.username,
+    bcrypt.hashSync(input.password, 10),
+    input.role,
+    input.displayName,
+    input.enabled ? 1 : 0
+  ]);
+  const user = await findUserByUsername(input.username);
+  if (!user) throw new Error('用户创建后未找到');
+  saveUserDataSourcePreference(user.id, input.defaultDataSourceId);
+  return findUserById(user.id);
+}
+
+export async function updateUser(input: {
+  id: number;
+  displayName: string;
+  role: UserRole;
+  enabled: boolean;
+  defaultDataSourceId?: number | null;
+  newPassword?: string;
+}) {
+  if (input.newPassword) {
+    run('UPDATE users SET display_name = ?, role = ?, enabled = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+      input.displayName,
+      input.role,
+      input.enabled ? 1 : 0,
+      bcrypt.hashSync(input.newPassword, 10),
+      input.id
+    ]);
+  } else {
+    run('UPDATE users SET display_name = ?, role = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+      input.displayName,
+      input.role,
+      input.enabled ? 1 : 0,
+      input.id
+    ]);
+  }
+  saveUserDataSourcePreference(input.id, input.defaultDataSourceId);
   return findUserById(input.id);
 }
 

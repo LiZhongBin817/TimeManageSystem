@@ -5,6 +5,8 @@ import { syncEnterpriseMembersForDingTalk } from './enterpriseMemberSync';
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 let lastSyncDate = '';
+let lastScheduledAttemptAt = 0;
+const SCHEDULED_RETRY_INTERVAL_MS = Number(process.env.DINGTALK_SYNC_RETRY_INTERVAL_MS || 10 * 60 * 1000);
 
 function todayInShanghai() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -23,20 +25,20 @@ function timeInShanghai() {
 }
 
 async function runSync(reason: string) {
-  if (running) return;
+  if (running) return false;
   running = true;
   try {
     console.log(`[dingtalk-sync] starting ${reason}`);
-    const [sheetResult, memberResult] = await Promise.all([
-      syncDingTalkToLocal(),
-      syncEnterpriseMembersForDingTalk()
-    ]);
+    const sheetResult = await syncDingTalkToLocal();
+    const memberResult = await syncEnterpriseMembersForDingTalk();
     console.log(
       `[dingtalk-sync] finished ${reason}: sheets success=${sheetResult.success}, failed=${sheetResult.failed}; ` +
       `members success=${memberResult.success}, failed=${memberResult.failed}, total=${memberResult.totalMembers}`
     );
+    return sheetResult.failed === 0 && memberResult.failed === 0;
   } catch (error) {
     console.error('[dingtalk-sync] failed', error);
+    return false;
   } finally {
     running = false;
   }
@@ -48,8 +50,13 @@ async function tick() {
   const today = todayInShanghai();
   const currentTime = timeInShanghai();
   if (lastSyncDate !== today && currentTime >= settings.scheduledTime) {
-    lastSyncDate = today;
-    await runSync(`scheduled-${today}`);
+    const now = Date.now();
+    if (lastScheduledAttemptAt && now - lastScheduledAttemptAt < SCHEDULED_RETRY_INTERVAL_MS) return;
+    lastScheduledAttemptAt = now;
+    const success = await runSync(`scheduled-${today}`);
+    if (success) {
+      lastSyncDate = today;
+    }
   }
 }
 
@@ -59,11 +66,13 @@ export function startDingTalkSyncScheduler() {
   timer = setInterval(tick, 60 * 1000);
   getDingTalkSyncSettings()
     .then((settings) => {
-      if (settings.enabled && timeInShanghai() >= settings.scheduledTime) {
-        lastSyncDate = todayInShanghai();
-      }
       if (settings.enabled && settings.startupSyncEnabled) {
-        setTimeout(() => runSync('startup'), settings.startupDelayMs);
+        setTimeout(async () => {
+          const success = await runSync('startup');
+          if (success && timeInShanghai() >= settings.scheduledTime) {
+            lastSyncDate = todayInShanghai();
+          }
+        }, settings.startupDelayMs);
       }
     })
     .catch((error) => console.error('[dingtalk-sync] failed to load startup settings', error));

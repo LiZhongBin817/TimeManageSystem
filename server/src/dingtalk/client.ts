@@ -43,6 +43,8 @@ const WORKSHEET_CACHE_TTL = 5 * 60 * 1000;
 const ROW_READ_CHUNK_SIZE = Number(process.env.DINGTALK_ROW_READ_CHUNK_SIZE || 150);
 const ROW_READ_MAX_ROW = Number(process.env.DINGTALK_ROW_READ_MAX_ROW || 2000);
 const ROW_READ_TAIL_WINDOW = Number(process.env.DINGTALK_ROW_READ_TAIL_WINDOW || 20);
+const DINGTALK_REQUEST_TIMEOUT = Number(process.env.DINGTALK_REQUEST_TIMEOUT || 20000);
+const DINGTALK_REQUEST_RETRIES = Number(process.env.DINGTALK_REQUEST_RETRIES || 3);
 const CACHE_TTL_SECONDS = Number(process.env.DINGTALK_CACHE_TTL_SECONDS || 180);
 const CACHE_STALE_SECONDS = Number(process.env.DINGTALK_CACHE_STALE_SECONDS || 86400);
 const LOCAL_FIRST = process.env.DINGTALK_LOCAL_FIRST !== 'false';
@@ -86,6 +88,17 @@ function errorCode(error: any) {
   return String(error?.response?.data?.code || error?.response?.status || error?.code || error?.message || 'unknown').slice(0, 120);
 }
 
+function isTransientDingTalkError(error: any) {
+  const status = error?.response?.status;
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return [429, 500, 502, 503, 504].includes(status)
+    || ['ETIMEDOUT', 'ECONNABORTED', 'ECONNRESET', 'EAI_AGAIN', 'ENETUNREACH', 'ERR_NETWORK'].includes(code)
+    || message.includes('timeout')
+    || message.includes('network')
+    || message.includes('fetch failed');
+}
+
 function columnName(index: number) {
   let name = '';
   let n = index + 1;
@@ -103,49 +116,7 @@ function excelSerialToDate(value: number) {
 }
 
 async function fetchJson(url: string, options: { method?: string; headers?: Record<string, string>; body?: unknown; timeout?: number } = {}) {
-  const fetchImpl = (globalThis as any).fetch;
-  const AbortControllerImpl = (globalThis as any).AbortController;
-  if (!fetchImpl || !AbortControllerImpl) throw new Error('当前 Node.js 版本不支持 fetch，请升级到 Node 18 或以上');
-  const controller = new AbortControllerImpl();
-  const timer = setTimeout(() => controller.abort(), options.timeout || 12000);
-  try {
-    const response = await fetchImpl(url, {
-      method: options.method || 'GET',
-      headers: {
-        ...(options.body ? { 'content-type': 'application/json' } : {}),
-        ...(options.headers || {})
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal
-    });
-    const text = await response.text();
-    let data: any = {};
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
-      }
-    }
-    if (!response.ok) {
-      const error = new Error(data?.message || data?.errmsg || response.statusText || '钉钉接口请求失败') as Error & {
-        response?: { status: number; data: unknown };
-      };
-      error.response = { status: response.status, data };
-      throw error;
-    }
-    return { data };
-  } catch (error: any) {
-    if (error?.name === 'AbortError') {
-      return fetchJsonWithAxios(url, options, '钉钉接口请求超时，请检查服务器网络');
-    }
-    if (error instanceof TypeError || error?.message === 'fetch failed' || error?.code) {
-      return fetchJsonWithAxios(url, options, error.message || 'fetch failed');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  return fetchJsonWithAxios(url, options);
 }
 
 async function fetchJsonWithAxios(
@@ -162,7 +133,7 @@ async function fetchJsonWithAxios(
         ...(options.headers || {})
       },
       data: options.body,
-      timeout: options.timeout || 12000,
+      timeout: options.timeout || DINGTALK_REQUEST_TIMEOUT,
       ...dingTalkAxiosOptions
     });
     return { data: response.data };
@@ -898,8 +869,8 @@ export class DingTalkSheetClient {
       } catch (error: any) {
         lastError = error;
         const status = error.response?.status;
-        if (![429, 500, 502, 503, 504].includes(status) || index === attempts - 1) break;
-        await new Promise((resolve) => setTimeout(resolve, 800 * (index + 1)));
+        if ((!isTransientDingTalkError(error) && ![429, 500, 502, 503, 504].includes(status)) || index === attempts - 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (index + 1)));
       }
     }
     throw lastError;
@@ -944,7 +915,7 @@ export class DingTalkSheetClient {
   private async trackedAxios<T>(capability: string, request: () => Promise<T>): Promise<T> {
     const startedAt = Date.now();
     try {
-      const response: any = await request();
+      const response: any = await this.withRetry(request, DINGTALK_REQUEST_RETRIES);
       logApiCall({
         platform: 'dingtalk',
         capability,
@@ -978,11 +949,12 @@ export class DingTalkSheetClient {
       : path.includes('/sheets') ? (options.method === 'POST' ? 'sheet.create' : 'sheet.list')
         : path.includes('/oauth2/') ? 'oauth.app_token'
           : 'dingtalk.api';
-    return fetchJson(url.toString(), {
+    return this.withRetry(() => fetchJson(url.toString(), {
       method: options.method,
       headers: options.headers,
-      body: options.body
-    }).then((response) => {
+      body: options.body,
+      timeout: DINGTALK_REQUEST_TIMEOUT
+    }), DINGTALK_REQUEST_RETRIES).then((response) => {
       logApiCall({
         platform: 'dingtalk',
         capability,

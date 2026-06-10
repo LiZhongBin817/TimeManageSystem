@@ -1,5 +1,7 @@
 import axios from 'axios';
 import crypto from 'crypto';
+import http from 'http';
+import https from 'https';
 import { AuthUser } from '../auth';
 import { all, get, logApiCall, run } from '../db';
 import { buildDashboardSummary, ScheduleItem } from './dashboardSummary';
@@ -32,6 +34,35 @@ interface NotificationUserSettingsRow {
   enabled: number;
   scheduled_time?: string;
   last_scheduled_date?: string;
+}
+
+const NOTIFICATION_REQUEST_TIMEOUT = Number(process.env.NOTIFICATION_REQUEST_TIMEOUT || 15000);
+const NOTIFICATION_REQUEST_RETRIES = Number(process.env.NOTIFICATION_REQUEST_RETRIES || 3);
+const notificationHttpAgent = new http.Agent({ family: 4 });
+const notificationHttpsAgent = new https.Agent({ family: 4 });
+
+function isTransientNotificationError(error: any) {
+  const status = error?.response?.status;
+  const code = String(error?.code || '');
+  const message = String(error?.message || '').toLowerCase();
+  return [429, 500, 502, 503, 504].includes(status)
+    || ['ETIMEDOUT', 'ECONNABORTED', 'ECONNRESET', 'EAI_AGAIN', 'ENETUNREACH', 'ERR_NETWORK'].includes(code)
+    || message.includes('timeout')
+    || message.includes('network');
+}
+
+async function withRetry<T>(request: () => Promise<T>, attempts = NOTIFICATION_REQUEST_RETRIES) {
+  let lastError: unknown;
+  for (let index = 0; index < attempts; index += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNotificationError(error) || index === attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (index + 1)));
+    }
+  }
+  throw lastError;
 }
 
 function parseKeywords(value?: string) {
@@ -232,10 +263,16 @@ async function sendDingTalkMarkdown(settings: NotificationSettings, title: strin
   const startedAt = Date.now();
   let data: any;
   try {
-    const response = await axios.post(url, {
-      msgtype: 'markdown',
-      markdown: { title, text: withKeywords(markdown, settings.keywords) }
-    });
+    const response = await withRetry(() =>
+      axios.post(url, {
+        msgtype: 'markdown',
+        markdown: { title, text: withKeywords(markdown, settings.keywords) }
+      }, {
+        timeout: NOTIFICATION_REQUEST_TIMEOUT,
+        httpAgent: notificationHttpAgent,
+        httpsAgent: notificationHttpsAgent
+      })
+    );
     data = response.data;
     logApiCall({
       platform: 'dingtalk',

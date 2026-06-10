@@ -20,6 +20,8 @@ import {
   all,
   copyDataSourceStaffAssignments,
   countDataSourceStaffAssignments,
+  createLocalUser,
+  findUserByUsername,
   getModulePermission,
   getApiUsageSummary,
   getDingTalkSyncSettings,
@@ -62,6 +64,15 @@ import {
 export const router = Router();
 
 function serializeUser(user: any) {
+  const hasLocalLogin = Boolean(user.password_hash);
+  const hasEnterpriseLogin = Number(user.identity_count || 0) > 0;
+  const loginMethod = hasLocalLogin && hasEnterpriseLogin
+    ? 'both'
+    : hasLocalLogin
+      ? 'local'
+      : hasEnterpriseLogin
+        ? 'enterprise'
+        : 'none';
   return {
     id: user.id,
     username: user.username,
@@ -70,6 +81,9 @@ function serializeUser(user: any) {
     enabled: Boolean(user.enabled),
     defaultDataSourceId: user.default_data_source_id || null,
     defaultDataSourceName: user.default_data_source_name || '',
+    hasLocalLogin,
+    hasEnterpriseLogin,
+    loginMethod,
     createdAt: user.created_at,
     updatedAt: user.updated_at
   };
@@ -82,6 +96,18 @@ const loginSchema = z.object({
 });
 
 const userSchema = z.object({
+  displayName: z.string().min(1),
+  role: z.enum(['admin', 'editor', 'viewer']),
+  enabled: z.boolean(),
+  defaultDataSourceId: z.number().int().positive().nullable().optional(),
+  newPassword: z.string().max(64).optional()
+});
+
+const usernameSchema = z.string().trim().min(3).max(50).regex(/^[A-Za-z0-9_.-]+$/);
+
+const createUserSchema = z.object({
+  username: usernameSchema,
+  password: z.string().min(6).max(64),
   displayName: z.string().min(1),
   role: z.enum(['admin', 'editor', 'viewer']),
   enabled: z.boolean(),
@@ -437,6 +463,31 @@ router.get('/users', async (req, res, next) => {
   }
 });
 
+router.post('/users', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: '只有管理员可以管理用户' });
+      return;
+    }
+    const parsed = createUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '用户信息不完整，用户名需为 3-50 位字母、数字、下划线、点或短横线，密码至少 6 位' });
+      return;
+    }
+    const existing = await findUserByUsername(parsed.data.username);
+    if (existing) {
+      res.status(409).json({ message: '登录标识已存在，请换一个用户名' });
+      return;
+    }
+    const created = await createLocalUser(parsed.data);
+    const users = await listUsers();
+    const user = users.find((item) => item.id === created?.id) || created;
+    res.status(201).json({ user: serializeUser(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.put('/users/:id', async (req, res, next) => {
   try {
     if (req.user!.role !== 'admin') {
@@ -464,8 +515,15 @@ router.put('/users/:id', async (req, res, next) => {
       res.status(400).json({ message: '至少需要保留一个启用的管理员账号，避免无法管理权限' });
       return;
     }
-    const user = await updateUser({ id: targetId, ...parsed.data });
-    res.json({ user });
+    const nextPassword = parsed.data.newPassword?.trim() ? parsed.data.newPassword : undefined;
+    if (nextPassword && nextPassword.length < 6) {
+      res.status(400).json({ message: '新密码至少 6 位' });
+      return;
+    }
+    const user = await updateUser({ id: targetId, ...parsed.data, newPassword: nextPassword });
+    const usersAfterUpdate = await listUsers();
+    const refreshed = usersAfterUpdate.find((item) => item.id === user?.id) || user;
+    res.json({ user: serializeUser(refreshed) });
   } catch (error) {
     next(error);
   }

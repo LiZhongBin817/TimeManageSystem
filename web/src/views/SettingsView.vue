@@ -3,6 +3,7 @@ import { Bell, Delete, Edit, Plus, Refresh, Upload } from '@element-plus/icons-v
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { computed, onMounted, reactive, ref } from 'vue';
 import {
+  createManagedUser,
   deleteConfigModule,
   deleteDataSourceInstance,
   getConfigModules,
@@ -51,6 +52,21 @@ import type {
   User
 } from '../types';
 
+type UserDialogMode = 'create' | 'edit';
+
+interface UserFormState {
+  id: number;
+  username: string;
+  displayName: string;
+  role: Role;
+  enabled: boolean;
+  defaultDataSourceId: number | null;
+  password: string;
+  confirmPassword: string;
+  newPassword: string;
+  confirmNewPassword: string;
+}
+
 const loading = ref(false);
 const sources = ref<DataSourceInstance[]>([]);
 const modules = ref<ModuleConfig[]>([]);
@@ -75,15 +91,10 @@ const notificationPushing = ref(false);
 const sourceDialogOpen = ref(false);
 const moduleDialogOpen = ref(false);
 const userDialogOpen = ref(false);
+const userDialogMode = ref<UserDialogMode>('edit');
 const sourceForm = reactive<DataSourceInstance>(emptySource());
 const moduleForm = reactive<ModuleConfig>(emptyModule());
-const userForm = reactive<Pick<ManagedUser, 'id' | 'displayName' | 'role' | 'enabled' | 'defaultDataSourceId'>>({
-  id: 0,
-  displayName: '',
-  role: 'viewer',
-  enabled: true,
-  defaultDataSourceId: null
-});
+const userForm = reactive<UserFormState>(emptyUserForm());
 const notificationForm = reactive<NotificationSettings>({
   enabled: false,
   webhookUrl: '',
@@ -135,6 +146,7 @@ const referenceModuleOptions = computed(() => {
 });
 const isAdmin = computed(() => me.value?.role === 'admin');
 const canUseNotification = computed(() => Boolean(me.value));
+const userDialogTitle = computed(() => userDialogMode.value === 'create' ? '新增用户' : '用户管理');
 const roleOptions: Array<{ label: string; value: Role }> = [
   { label: '管理员', value: 'admin' },
   { label: '编辑者', value: 'editor' },
@@ -174,6 +186,20 @@ function syncStatusText(value: unknown) {
   if (text === 'running') return '运行中';
   if (text === 'skipped') return '已跳过';
   return text || '-';
+}
+
+function loginMethodText(row: ManagedUser) {
+  if (row.loginMethod === 'both' || (row.hasLocalLogin && row.hasEnterpriseLogin)) return '双登录';
+  if (row.loginMethod === 'local' || row.hasLocalLogin) return '本地账号';
+  if (row.loginMethod === 'enterprise' || row.hasEnterpriseLogin) return '企业账号';
+  return '未配置';
+}
+
+function loginMethodTagType(row: ManagedUser) {
+  if (row.loginMethod === 'both' || (row.hasLocalLogin && row.hasEnterpriseLogin)) return 'success';
+  if (row.loginMethod === 'local' || row.hasLocalLogin) return '';
+  if (row.loginMethod === 'enterprise' || row.hasEnterpriseLogin) return 'info';
+  return 'warning';
 }
 
 function emptySource(): DataSourceInstance {
@@ -231,6 +257,21 @@ function emptyModule(): ModuleConfig {
     sortOrder: 0,
     referenceModuleKey: '',
     fields: defaultProjectFields()
+  };
+}
+
+function emptyUserForm(): UserFormState {
+  return {
+    id: 0,
+    username: '',
+    displayName: '',
+    role: 'viewer',
+    enabled: true,
+    defaultDataSourceId: null,
+    password: '',
+    confirmPassword: '',
+    newPassword: '',
+    confirmNewPassword: ''
   };
 }
 
@@ -596,20 +637,81 @@ async function syncModule(row: ModuleConfig) {
 }
 
 function openUserEdit(row: ManagedUser) {
+  userDialogMode.value = 'edit';
   Object.assign(userForm, {
     id: row.id,
+    username: row.username,
     displayName: row.displayName,
     role: row.role,
     enabled: row.enabled,
-    defaultDataSourceId: row.defaultDataSourceId || null
+    defaultDataSourceId: row.defaultDataSourceId || null,
+    password: '',
+    confirmPassword: '',
+    newPassword: '',
+    confirmNewPassword: ''
   });
+  userDialogOpen.value = true;
+}
+
+function openUserCreate() {
+  userDialogMode.value = 'create';
+  Object.assign(userForm, emptyUserForm());
   userDialogOpen.value = true;
 }
 
 async function submitUser() {
   try {
-    await updateManagedUser(userForm);
-    ElMessage.success('用户已保存');
+    const displayName = userForm.displayName.trim();
+    if (!displayName) {
+      ElMessage.warning('请填写显示名称');
+      return;
+    }
+
+    if (userDialogMode.value === 'create') {
+      const username = userForm.username.trim();
+      if (!/^[A-Za-z0-9_.-]{3,50}$/.test(username)) {
+        ElMessage.warning('登录标识需为 3-50 位字母、数字、下划线、点或短横线');
+        return;
+      }
+      if (!userForm.password.trim() || userForm.password.length < 6) {
+        ElMessage.warning('初始密码至少 6 位');
+        return;
+      }
+      if (userForm.password !== userForm.confirmPassword) {
+        ElMessage.warning('两次输入的密码不一致');
+        return;
+      }
+      await createManagedUser({
+        username,
+        password: userForm.password,
+        displayName,
+        role: userForm.role,
+        enabled: userForm.enabled,
+        defaultDataSourceId: userForm.defaultDataSourceId
+      });
+      ElMessage.success('用户已创建。如登录页未显示账号密码登录，请在数据源实例中启用备用登录');
+    } else {
+      const newPassword = userForm.newPassword.trim() ? userForm.newPassword : undefined;
+      if (newPassword && newPassword.length < 6) {
+        ElMessage.warning('新密码至少 6 位');
+        return;
+      }
+      if (newPassword && newPassword !== userForm.confirmNewPassword) {
+        ElMessage.warning('两次输入的新密码不一致');
+        return;
+      }
+      await updateManagedUser({
+        id: userForm.id,
+        displayName,
+        role: userForm.role,
+        enabled: userForm.enabled,
+        defaultDataSourceId: userForm.defaultDataSourceId,
+        newPassword
+      });
+      ElMessage.success(newPassword
+        ? '用户已保存，密码已重置。如登录页未显示账号密码登录，请在数据源实例中启用备用登录'
+        : '用户已保存');
+    }
     userDialogOpen.value = false;
     load();
   } catch (error: any) {
@@ -881,12 +983,18 @@ onMounted(load);
 
         <el-tab-pane v-if="isAdmin" label="用户管理" name="users">
           <div class="toolbar permission-toolbar">
+            <el-button type="primary" :icon="Plus" @click="openUserCreate">新增用户</el-button>
             <el-button type="primary" :loading="syncingMembers" @click="syncMembers">同步企业成员</el-button>
           </div>
           <el-table :data="users" stripe>
             <el-table-column prop="displayName" label="显示名称" min-width="150" />
             <el-table-column prop="username" label="登录标识" min-width="220" />
             <el-table-column prop="role" label="角色" width="110" />
+            <el-table-column label="登录方式" width="120">
+              <template #default="{ row }">
+                <el-tag :type="loginMethodTagType(row)" size="small">{{ loginMethodText(row) }}</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="默认数据源" min-width="180">
               <template #default="{ row }">
                 {{ row.defaultDataSourceName || '跟随登录页选择' }}
@@ -1146,9 +1254,24 @@ onMounted(load);
       </template>
     </el-dialog>
 
-    <el-dialog v-model="userDialogOpen" title="用户管理" width="560px">
+    <el-dialog v-model="userDialogOpen" :title="userDialogTitle" width="560px">
       <el-form label-position="top">
+        <el-form-item v-if="userDialogMode === 'create'" label="登录标识" required>
+          <el-input v-model="userForm.username" placeholder="3-50 位字母、数字、下划线、点或短横线" />
+          <div class="field-help">用于账号密码登录，创建后不建议再修改。</div>
+        </el-form-item>
+        <el-form-item v-else label="登录标识">
+          <el-input v-model="userForm.username" disabled />
+        </el-form-item>
         <el-form-item label="显示名称" required><el-input v-model="userForm.displayName" /></el-form-item>
+        <template v-if="userDialogMode === 'create'">
+          <el-form-item label="初始密码" required>
+            <el-input v-model="userForm.password" type="password" show-password placeholder="至少 6 位" />
+          </el-form-item>
+          <el-form-item label="确认密码" required>
+            <el-input v-model="userForm.confirmPassword" type="password" show-password placeholder="再次输入初始密码" />
+          </el-form-item>
+        </template>
         <el-form-item label="角色">
           <el-select v-model="userForm.role" class="full-field">
             <el-option label="管理员" value="admin" />
@@ -1163,6 +1286,15 @@ onMounted(load);
           </el-select>
         </el-form-item>
         <el-form-item label="启用"><el-switch v-model="userForm.enabled" /></el-form-item>
+        <template v-if="userDialogMode === 'edit'">
+          <el-form-item label="重置密码">
+            <el-input v-model="userForm.newPassword" type="password" show-password placeholder="为空则不修改密码" />
+            <div class="field-help">设置后该用户可使用登录标识和新密码登录。</div>
+          </el-form-item>
+          <el-form-item v-if="userForm.newPassword" label="确认新密码">
+            <el-input v-model="userForm.confirmNewPassword" type="password" show-password placeholder="再次输入新密码" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="userDialogOpen = false">取消</el-button>
