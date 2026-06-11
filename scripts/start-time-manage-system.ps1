@@ -72,12 +72,24 @@ function Start-WslServices {
     Write-StartupLog "WSL nginx start failed: $($_.Exception.Message)"
   }
 
-  $serverCommand = @"
-mkdir -p '$WslProjectRoot/startup-logs'
-if ss -lnt 2>/dev/null | grep -q ':4000 '; then
+$serverCommand = @"
+wsl_project_root='$WslProjectRoot'
+mkdir -p "`$wsl_project_root/startup-logs"
+export NVM_DIR="/home/$WslUser/.nvm"
+[ -s "`$NVM_DIR/nvm.sh" ] && . "`$NVM_DIR/nvm.sh"
+if command -v pm2 >/dev/null 2>&1; then
+  if pm2 describe task-manage-api >/dev/null 2>&1; then
+    pm2 restart task-manage-api --update-env
+    echo 'WSL PM2 server restarted.'
+  else
+    cd "`$wsl_project_root/server" && pm2 start dist/index.js --name task-manage-api --update-env
+    pm2 save
+    echo 'WSL PM2 server started.'
+  fi
+elif ss -lnt 2>/dev/null | grep -q ':4000 '; then
   echo 'WSL server port 4000 is already listening.'
 else
-  cd '$WslProjectRoot/server' && nohup npm run start > '$WslProjectRoot/startup-logs/server.out.log' 2> '$WslProjectRoot/startup-logs/server.err.log' < /dev/null &
+  cd "`$wsl_project_root/server" && nohup npm run start > "`$wsl_project_root/startup-logs/server.out.log" 2> "`$wsl_project_root/startup-logs/server.err.log" < /dev/null &
   echo 'WSL server start command issued.'
 fi
 "@
