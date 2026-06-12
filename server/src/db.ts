@@ -15,6 +15,7 @@ export interface UserRecord {
   username: string;
   login_name?: string | null;
   password_hash?: string | null;
+  current_session_id?: string | null;
   role: UserRole;
   display_name: string;
   enabled: number;
@@ -274,6 +275,7 @@ export async function initDatabase() {
   `);
 
   await ensureColumn('users', 'login_name', 'TEXT');
+  await ensureColumn('users', 'current_session_id', 'TEXT');
   await ensureColumn('users', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
   await ensureColumn('users', 'updated_at', 'TEXT');
   run("UPDATE users SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)");
@@ -691,6 +693,10 @@ export async function isLoginNameAvailable(loginName: string, exceptUserId?: num
 
 export async function findUserById(id: number) {
   return get<UserRecord>('SELECT * FROM users WHERE id = ?', [id]);
+}
+
+export function updateUserSessionId(userId: number, sessionId: string) {
+  run('UPDATE users SET current_session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [sessionId, userId]);
 }
 
 export async function listUsers() {

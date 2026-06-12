@@ -49,7 +49,12 @@ api.interceptors.response.use(
     }
     if (error.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY);
-      if (location.pathname !== '/login') location.href = '/login';
+      if (location.pathname !== '/login') {
+        const message = error.response.data?.code === 'SESSION_REPLACED'
+          ? error.response.data.message || '账号已在其他设备登录，请重新登录'
+          : '';
+        location.href = message ? `/login?oauthError=${encodeURIComponent(message)}` : '/login';
+      }
     }
     return Promise.reject(error);
   }

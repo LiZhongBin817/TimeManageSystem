@@ -2,10 +2,11 @@
  * 认证辅助模块：生成 JWT 会话、校验账号状态，并把当前用户挂载到 Express 请求上。
  */
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { Role, getDataSource } from './config/modules';
-import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, upsertOAuthUser } from './db';
+import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, updateUserSessionId, upsertOAuthUser } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
 
@@ -19,6 +20,7 @@ export interface AuthUser {
   platform: 'dingtalk' | 'feishu';
   dataSourceName: string;
   provider?: IdentityProvider | 'local';
+  sessionId?: string;
 }
 
 declare global {
@@ -48,6 +50,9 @@ async function buildSession(user: UserRecord, dataSourceId: number, provider: Au
     throw new Error('请选择可用的数据源实例');
   }
 
+  const sessionId = randomUUID();
+  updateUserSessionId(user.id, sessionId);
+
   const payload: AuthUser = {
     id: user.id,
     username: user.username,
@@ -57,7 +62,8 @@ async function buildSession(user: UserRecord, dataSourceId: number, provider: Au
     dataSourceId: dataSource.id,
     platform: dataSource.platform,
     dataSourceName: dataSource.name,
-    provider
+    provider,
+    sessionId
   };
 
   return {
@@ -127,6 +133,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     }
     if (user.enabled === 0) {
       res.status(401).json({ message: '账号已停用，请联系管理员' });
+      return;
+    }
+    if (!tokenUser.sessionId || user.current_session_id !== tokenUser.sessionId) {
+      res.status(401).json({ code: 'SESSION_REPLACED', message: '账号已在其他设备登录，请重新登录' });
       return;
     }
 
