@@ -47,7 +47,7 @@ const filteredRows = computed(() => {
   return rows.value.filter((row) => {
     if (q && !Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(q))) return false;
     if (filters.content.trim() && !String(row.content ?? '').toLowerCase().includes(filters.content.trim().toLowerCase())) return false;
-    if (filters.isCompleted && String(row.isCompleted ?? '').trim() !== filters.isCompleted) return false;
+    if (filters.isCompleted && !matchCompletedFilter(row.isCompleted, filters.isCompleted)) return false;
     if (!matchDateRange(row.plannedTestAt, filters.plannedTestAt)) return false;
     if (!matchDateRange(row.actualTestAt, filters.actualTestAt)) return false;
     if (!matchDateRange(row.launchAt, filters.launchAt)) return false;
@@ -103,6 +103,12 @@ function matchDateRange(value: unknown, range: string[]) {
   const text = String(value ?? '').trim();
   if (!text || text === '-') return false;
   return text >= range[0] && text <= range[1];
+}
+
+function matchCompletedFilter(value: unknown, filterValue: string) {
+  const text = String(value ?? '').trim();
+  if (filterValue === '否') return text === '否' || text === '-' || text === '';
+  return text === filterValue;
 }
 
 function clearFilters() {

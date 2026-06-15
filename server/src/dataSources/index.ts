@@ -1,5 +1,5 @@
 /**
- * 数据源工厂：解析已配置的平台，并为请求创建对应的表格客户端。
+ * 数据源工厂：根据数据源配置创建对应平台的表格客户端。
  */
 import { AuthUser } from '../auth';
 import { DataSourceInstance, ModuleConfig, getDataSource } from '../config/configStore';
@@ -7,9 +7,6 @@ import { getUserIdentityForProvider } from '../db';
 import { DingTalkSheetClient } from '../dingtalk/client';
 import { FeishuSheetClient } from './feishuClient';
 
-/**
- * 解析实际生效的数据源实例，并返回对应平台的适配器。
- */
 export async function getDataSourceClient(dataSourceId?: number, user?: AuthUser) {
   const dataSource = await getDataSource(dataSourceId);
   if (!dataSource) throw new Error('未找到可用的数据源实例');
@@ -22,18 +19,30 @@ export function createClient(dataSource: DataSourceInstance) {
   throw new Error(`暂不支持的数据源平台：${dataSource.platform}`);
 }
 
-// 企业钉钉用户优先使用自己的 userId 操作，本地兜底登录使用配置中的 operator。
+// 钉钉数据操作优先使用当前系统账号绑定的钉钉身份；未绑定时才回退到数据源备用 operator。
 async function resolveRuntimeDataSource(dataSource: DataSourceInstance, user?: AuthUser): Promise<DataSourceInstance> {
-  if (!user || dataSource.platform !== 'dingtalk' || user.provider === 'local') return dataSource;
+  if (!user || dataSource.platform !== 'dingtalk') return dataSource;
+
   const identity = await getUserIdentityForProvider(user.id, 'dingtalk');
-  let raw: any = {};
+  let raw: Record<string, unknown> = {};
   try {
     raw = identity?.raw_json ? JSON.parse(identity.raw_json) : {};
   } catch {
     raw = {};
   }
-  const operatorId = raw?.userId || raw?.userid || dataSource.config.operatorId;
+
+  const operatorId = String(
+    raw.unionId
+      || raw.unionid
+      || identity?.union_id
+      || identity?.provider_user_id
+      || raw.userId
+      || raw.userid
+      || dataSource.config.operatorId
+      || ''
+  ).trim();
   if (!operatorId) return dataSource;
+
   return {
     ...dataSource,
     config: {
