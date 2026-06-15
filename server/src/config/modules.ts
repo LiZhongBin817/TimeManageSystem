@@ -15,6 +15,7 @@ export {
   canRead,
   findModule,
   getDataSource,
+  hardDeleteDataSource,
   listDataSources,
   listModules,
   replaceModuleFields,

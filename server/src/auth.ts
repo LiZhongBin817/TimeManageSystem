@@ -107,6 +107,28 @@ export function verifyOAuthState(state: string) {
   return jwt.verify(state, jwtSecret) as { provider: IdentityProvider; dataSourceId: number; redirectUri: string };
 }
 
+export async function resolveAuthUser(authHeader?: string): Promise<AuthUser | undefined> {
+  try {
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    if (!token) return undefined;
+
+    const tokenUser = jwt.verify(token, jwtSecret) as AuthUser;
+    const user = await findUserById(tokenUser.id);
+    if (!user || user.enabled === 0) return undefined;
+    if (!tokenUser.sessionId || user.current_session_id !== tokenUser.sessionId) return undefined;
+
+    const tokenDataSource = await getDataSource(tokenUser.dataSourceId);
+    if (!tokenDataSource?.enabled) return undefined;
+
+    const preference = await getUserDataSourcePreference(user.id);
+    if (preference?.data_source_id && preference.data_source_id !== tokenUser.dataSourceId) return undefined;
+
+    return tokenUser;
+  } catch {
+    return undefined;
+  }
+}
+
 function dataSourceChanged(res: Response, message = '账号数据源已变更，请重新登录') {
   res.status(409).json({ code: 'DATA_SOURCE_CHANGED', message });
 }

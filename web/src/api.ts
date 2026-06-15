@@ -146,6 +146,11 @@ export async function deleteDataSourceInstance(id: number) {
   await api.delete(`/data-source/instances/${id}`);
 }
 
+export async function hardDeleteDataSourceInstance(id: number) {
+  const { data } = await api.delete<{ deleted: boolean; modules: number }>(`/data-source/instances/${id}/hard`);
+  return data;
+}
+
 export async function getModules() {
   const { data } = await api.get<{ modules: ModuleConfig[] }>('/modules');
   return data.modules;

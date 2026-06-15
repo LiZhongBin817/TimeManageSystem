@@ -65,6 +65,7 @@ export interface DataSourceInstance {
   name: string;
   platform: PlatformKey;
   config: Record<string, string>;
+  ownerUserId?: number | null;
   enabled: boolean;
   sortOrder: number;
   staffTemplateDataSourceId?: number | null;

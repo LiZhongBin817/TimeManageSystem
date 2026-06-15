@@ -11,6 +11,7 @@ export interface DataSourceInstance {
   name: string;
   platform: 'dingtalk' | 'feishu';
   config: Record<string, string>;
+  ownerUserId?: number | null;
   enabled: boolean;
   sortOrder: number;
 }
@@ -76,6 +77,7 @@ function parseDataSource(row: any): DataSourceInstance {
     name: row.name,
     platform: row.platform,
     config: JSON.parse(row.config_json || '{}'),
+    ownerUserId: row.owner_user_id ?? null,
     enabled: Boolean(row.enabled),
     sortOrder: row.sort_order
   };
@@ -184,24 +186,45 @@ async function inheritSharedConfig(input: Partial<DataSourceInstance> & { platfo
 export async function saveDataSource(input: Partial<DataSourceInstance> & { name: string; platform: 'dingtalk' | 'feishu'; config: Record<string, string> }) {
   const config = await inheritSharedConfig(input);
   if (input.id) {
-    run('UPDATE data_source_instances SET name = ?, platform = ?, config_json = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+    run('UPDATE data_source_instances SET name = ?, platform = ?, config_json = ?, owner_user_id = ?, enabled = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
       input.name,
       input.platform,
       JSON.stringify(config),
+      input.ownerUserId ?? null,
       input.enabled === false ? 0 : 1,
       input.sortOrder ?? 0,
       input.id
     ]);
     return getDataSource(input.id);
   }
-  run('INSERT INTO data_source_instances (name, platform, config_json, enabled, sort_order) VALUES (?, ?, ?, ?, ?)', [
+  run('INSERT INTO data_source_instances (name, platform, config_json, owner_user_id, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)', [
     input.name,
     input.platform,
     JSON.stringify(config),
+    input.ownerUserId ?? null,
     input.enabled === false ? 0 : 1,
     input.sortOrder ?? 0
   ]);
   return getDataSource((await get<{ id: number }>('SELECT last_insert_rowid() as id'))?.id);
+}
+
+export async function hardDeleteDataSource(dataSourceId: number) {
+  const modules = await all<ModuleRow>('SELECT * FROM module_configs WHERE data_source_id = ?', [dataSourceId]);
+  await withPersistenceBatch(() => {
+    for (const module of modules) {
+      run('DELETE FROM module_fields WHERE module_key = ?', [module.module_key]);
+      run('DELETE FROM module_permissions WHERE module_key = ?', [module.module_key]);
+    }
+    run('DELETE FROM module_configs WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM module_rows WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM sheet_cache WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM sync_jobs WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM enterprise_member_sync_logs WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM data_source_staff_assignments WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM user_data_source_preferences WHERE data_source_id = ?', [dataSourceId]);
+    run('DELETE FROM data_source_instances WHERE id = ?', [dataSourceId]);
+  });
+  return { modules: modules.length };
 }
 
 export async function listModules(options: { category?: ModuleCategory; enabledOnly?: boolean; dataSourceId?: number } = {}) {

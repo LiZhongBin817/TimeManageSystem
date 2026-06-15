@@ -308,12 +308,14 @@ export async function initDatabase() {
       name TEXT NOT NULL,
       platform TEXT NOT NULL,
       config_json TEXT NOT NULL,
+      owner_user_id INTEGER,
       enabled INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  await ensureColumn('data_source_instances', 'owner_user_id', 'INTEGER');
 
   run(`
     CREATE TABLE IF NOT EXISTS module_configs (

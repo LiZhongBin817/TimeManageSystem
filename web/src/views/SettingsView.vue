@@ -6,7 +6,6 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import {
   createManagedUser,
   deleteConfigModule,
-  deleteDataSourceInstance,
   getConfigModules,
   getApiUsage,
   getDataSourceInstances,
@@ -19,6 +18,7 @@ import {
   getSyncOverview,
   getDingTalkSyncSettings,
   getUsers,
+  hardDeleteDataSourceInstance,
   initializeStaffAssignments,
   pushDashboardNotification,
   refreshApiCache,
@@ -536,18 +536,6 @@ async function initializeStaffForSource(row: DataSourceInstance) {
   }
 }
 
-async function removeSource(row: DataSourceInstance) {
-  if (!row.id) return;
-  try {
-    await ElMessageBox.confirm('确认停用这个数据源实例？', '停用确认', { type: 'warning' });
-    await deleteDataSourceInstance(row.id);
-    ElMessage.success('已停用');
-    load();
-  } catch (error: any) {
-    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '停用失败');
-  }
-}
-
 function openModuleCreate() {
   assign(moduleForm, emptyModule());
   moduleForm.dataSourceId = me.value?.dataSourceId;
@@ -734,6 +722,39 @@ async function submitUser() {
   }
 }
 
+async function toggleSourceEnabled(row: DataSourceInstance) {
+  if (!row.id) return;
+  const nextEnabled = !row.enabled;
+  try {
+    await ElMessageBox.confirm(
+      `确认${nextEnabled ? '启用' : '停用'}这个数据源实例？`,
+      `${nextEnabled ? '启用' : '停用'}确认`,
+      { type: 'warning' }
+    );
+    await saveDataSourceInstance({ ...row, enabled: nextEnabled });
+    ElMessage.success(`已${nextEnabled ? '启用' : '停用'}`);
+    load();
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || `${nextEnabled ? '启用' : '停用'}失败`);
+  }
+}
+
+async function hardRemoveSource(row: DataSourceInstance) {
+  if (!row.id) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认永久删除「${row.name}」？此操作会删除该数据源下的模块配置、本地数据、同步记录和缓存，无法恢复。`,
+      '永久删除确认',
+      { type: 'error', confirmButtonText: '永久删除' }
+    );
+    await hardDeleteDataSourceInstance(row.id);
+    ElMessage.success('已永久删除');
+    load();
+  } catch (error: any) {
+    if (error !== 'cancel') ElMessage.error(error.response?.data?.message || '永久删除失败');
+  }
+}
+
 async function resetUserPassword() {
   if (userDialogMode.value !== 'edit' || !userForm.id) return;
   const loginName = userForm.loginName.trim();
@@ -795,11 +816,14 @@ onMounted(load);
               </template>
             </el-table-column>
             <el-table-column prop="sortOrder" label="排序" width="90" />
-            <el-table-column label="操作" width="250">
+            <el-table-column label="操作" width="310">
               <template #default="{ row }">
                 <el-button v-if="isAdmin" size="small" @click="initializeStaffForSource(row)">初始化人员</el-button>
                 <el-button :icon="Edit" circle @click="openSourceEdit(row)" />
-                <el-button :icon="Delete" circle type="danger" @click="removeSource(row)" />
+                <el-button size="small" :type="row.enabled ? 'warning' : 'success'" @click="toggleSourceEnabled(row)">
+                  {{ row.enabled ? '停用' : '启用' }}
+                </el-button>
+                <el-button :icon="Delete" circle type="danger" @click="hardRemoveSource(row)" />
               </template>
             </el-table-column>
           </el-table>

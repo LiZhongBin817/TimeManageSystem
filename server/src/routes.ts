@@ -3,12 +3,14 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
-import { login, loginWithOAuth, requireAuth, signOAuthState, verifyOAuthState } from './auth';
+import { login, loginWithOAuth, requireAuth, resolveAuthUser, signOAuthState, verifyOAuthState } from './auth';
 import {
   ModuleConfig,
   ModuleField,
   canConfigure,
   findModule,
+  getDataSource,
+  hardDeleteDataSource,
   listDataSources,
   listModules,
   replaceModuleFields,
@@ -246,6 +248,24 @@ async function ensureStaffAssignments(user: NonNullable<Express.Request['user']>
   }
 }
 
+function visibleDataSourcesForUser(user: NonNullable<Express.Request['user']>, dataSources: any[]) {
+  if (user.role === 'admin') return dataSources;
+  return dataSources.filter((item) => item.ownerUserId === user.id || item.id === user.dataSourceId);
+}
+
+async function requireDataSourceAccess(req: any, res: any, dataSourceId: number) {
+  const dataSource = await getDataSource(dataSourceId);
+  if (!dataSource) {
+    res.status(404).json({ message: '数据源实例不存在' });
+    return undefined;
+  }
+  if (req.user.role !== 'admin' && dataSource.ownerUserId !== req.user.id && dataSource.id !== req.user.dataSourceId) {
+    res.status(403).json({ message: '不能操作其他用户的数据源实例' });
+    return undefined;
+  }
+  return dataSource;
+}
+
 router.get('/data-source/platforms', (_req, res) => {
   res.json({
     platforms: [
@@ -259,7 +279,8 @@ router.get('/data-source/instances', async (req, res, next) => {
   try {
     const includeDisabled = req.query.includeDisabled === 'true';
     const instances = await listDataSources(String(req.query.platform || '') || undefined, includeDisabled);
-    res.json({ instances });
+    const user = await resolveAuthUser(req.headers.authorization);
+    res.json({ instances: user ? visibleDataSourcesForUser(user, instances) : instances });
   } catch (error) {
     next(error);
   }
@@ -1015,7 +1036,7 @@ router.post('/data-source/instances', async (req, res, next) => {
       res.status(400).json({ message: '数据源实例配置不完整' });
       return;
     }
-    const instance = await saveDataSource(parsed.data);
+    const instance = await saveDataSource({ ...parsed.data, ownerUserId: req.user!.id });
     if (instance?.id && parsed.data.staffTemplateDataSourceId) {
       const sourceId = Number(parsed.data.staffTemplateDataSourceId);
       if (sourceId === req.user!.dataSourceId) await ensureStaffAssignments(req.user!);
@@ -1040,7 +1061,12 @@ router.put('/data-source/instances/:id', async (req, res, next) => {
       res.status(400).json({ message: '数据源实例配置不完整' });
       return;
     }
-    const instance = await saveDataSource(parsed.data);
+    const current = await requireDataSourceAccess(req, res, Number(req.params.id));
+    if (!current) return;
+    const instance = await saveDataSource({
+      ...parsed.data,
+      ownerUserId: current.ownerUserId ?? (req.user!.role === 'admin' ? null : req.user!.id)
+    });
     res.json({ instance });
   } catch (error) {
     next(error);
@@ -1053,8 +1079,25 @@ router.delete('/data-source/instances/:id', async (req, res, next) => {
       res.status(403).json({ message: '没有配置权限' });
       return;
     }
-    run('UPDATE data_source_instances SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [Number(req.params.id)]);
+    const dataSource = await requireDataSourceAccess(req, res, Number(req.params.id));
+    if (!dataSource) return;
+    run('UPDATE data_source_instances SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [dataSource.id]);
     res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/data-source/instances/:id/hard', async (req, res, next) => {
+  try {
+    if (!canConfigure(req.user!.role)) {
+      res.status(403).json({ message: '没有配置权限' });
+      return;
+    }
+    const dataSource = await requireDataSourceAccess(req, res, Number(req.params.id));
+    if (!dataSource) return;
+    const result = await hardDeleteDataSource(dataSource.id);
+    res.json({ deleted: true, ...result });
   } catch (error) {
     next(error);
   }
