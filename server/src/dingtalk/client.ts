@@ -46,7 +46,7 @@ const WORKSHEET_CACHE_TTL = 5 * 60 * 1000;
 const ROW_READ_CHUNK_SIZE = Number(process.env.DINGTALK_ROW_READ_CHUNK_SIZE || 150);
 const ROW_READ_MAX_ROW = Number(process.env.DINGTALK_ROW_READ_MAX_ROW || 2000);
 const ROW_READ_TAIL_WINDOW = Number(process.env.DINGTALK_ROW_READ_TAIL_WINDOW || 20);
-const DINGTALK_REQUEST_TIMEOUT = Number(process.env.DINGTALK_REQUEST_TIMEOUT || 20000);
+const DINGTALK_REQUEST_TIMEOUT = Number(process.env.DINGTALK_REQUEST_TIMEOUT || 60000);
 const DINGTALK_REQUEST_RETRIES = Number(process.env.DINGTALK_REQUEST_RETRIES || 3);
 const CACHE_TTL_SECONDS = Number(process.env.DINGTALK_CACHE_TTL_SECONDS || 180);
 const CACHE_STALE_SECONDS = Number(process.env.DINGTALK_CACHE_STALE_SECONDS || 86400);
@@ -689,16 +689,33 @@ export class DingTalkSheetClient {
   }
 
   private async writeRowWithExistingFormulas(module: ModuleConfig, rowNumber: number, row: SheetRow) {
-    const currentRow = await this.readRawRow(module, rowNumber);
-    const values = module.fields.map((field, index) => {
-      const existingFormula = currentRow.formulas?.[0]?.[index];
-      if (existingFormula) return existingFormula;
+    const editableRanges = this.buildNonFormulaRanges(module, row);
+    for (const range of editableRanges) {
+      await this.writeRawValues(module, rowNumber, range.values, range.startIndex);
+    }
+  }
+
+  // 更新已有行时跳过公式列，避免读取远端公式超时导致普通字段无法同步。
+  private buildNonFormulaRanges(module: ModuleConfig, row: SheetRow) {
+    const ranges: Array<{ startIndex: number; values: string[] }> = [];
+    let currentRange: { startIndex: number; values: string[] } | undefined;
+
+    module.fields.forEach((field, index) => {
+      if (field.type === 'formula' || field.formula) {
+        currentRange = undefined;
+        return;
+      }
+
       const value = String(row[field.key] ?? '').trim();
-      if (value) return value;
-      return field.type === 'date' || field.type === 'formula' || field.formula ? '' : '-';
+      const normalized = value || (field.type === 'date' ? '' : '-');
+      if (!currentRange) {
+        currentRange = { startIndex: index, values: [] };
+        ranges.push(currentRange);
+      }
+      currentRange.values.push(normalized);
     });
 
-    await this.writeRawValues(module, rowNumber, values);
+    return ranges;
   }
 
   private rewriteFormulaRow(formula: string, fromRow: number, toRow: number) {
@@ -766,11 +783,12 @@ export class DingTalkSheetClient {
     return response.data;
   }
 
-  private async writeRawValues(module: ModuleConfig, rowNumber: number, values: string[]) {
+  private async writeRawValues(module: ModuleConfig, rowNumber: number, values: string[], startIndex = 0) {
     const sheetId = await this.resolveSheetId(module);
     const token = await this.getAccessToken();
-    const lastColumn = columnName(module.fields.length - 1);
-    const range = `${module.sheetName}!A${rowNumber}:${lastColumn}${rowNumber}`;
+    const firstColumn = columnName(startIndex);
+    const lastColumn = columnName(startIndex + values.length - 1);
+    const range = `${module.sheetName}!${firstColumn}${rowNumber}:${lastColumn}${rowNumber}`;
 
     await this.withRetry(() =>
       this.fetchApi(`/v1.0/doc/workbooks/${this.config.workbookId}/sheets/${sheetId}/ranges/${encodeURIComponent(range)}`, {

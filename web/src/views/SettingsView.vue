@@ -353,10 +353,7 @@ async function syncDingTalkData() {
   dingTalkSyncing.value = true;
   try {
     const result = await syncDingTalkNow();
-    const memberText = result.members
-      ? `，企业成员 ${result.members.totalMembers || 0} 人（新增 ${result.members.created || 0}，更新 ${result.members.updated || 0}）`
-      : '';
-    ElMessage.success(`钉钉同步完成：表格 ${result.success}/${result.total}${memberText}`);
+    ElMessage.success(result.message || '钉钉同步已开始，请稍后刷新同步记录');
     await refreshUsage();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '钉钉同步失败');

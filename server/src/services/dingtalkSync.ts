@@ -86,3 +86,7 @@ export async function syncDingTalkToLocal(options: { dataSourceId?: number; modu
     syncing = false;
   }
 }
+
+export function isDingTalkSyncRunning() {
+  return syncing;
+}
