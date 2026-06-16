@@ -8,6 +8,16 @@ import { getNotificationSettings, markScheduledSent, markUserScheduledSent, push
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
+const MAX_RETRY_COUNT = Number(process.env.NOTIFICATION_SCHEDULED_MAX_RETRIES || 5);
+const RETRY_DELAYS_MS = [5, 10, 30, 60, 120].map((minute) => minute * 60 * 1000);
+
+interface RetryState {
+  date: string;
+  attempts: number;
+  nextRetryAt: number;
+}
+
+const retryStates = new Map<string, RetryState>();
 
 function todayInShanghai() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -27,6 +37,35 @@ function timeInShanghai() {
 
 function hasReachedTime(currentTime: string, scheduledTime = '09:00') {
   return currentTime >= scheduledTime;
+}
+
+function retryKey(scope: 'global' | 'user', id = 'default') {
+  return `${scope}:${id}`;
+}
+
+function canRetry(key: string, today: string) {
+  const state = retryStates.get(key);
+  return !state || state.date !== today || Date.now() >= state.nextRetryAt;
+}
+
+async function handleScheduledFailure(key: string, today: string, markDone: () => Promise<void>) {
+  const current = retryStates.get(key);
+  const attempts = current?.date === today ? current.attempts + 1 : 1;
+  const delay = RETRY_DELAYS_MS[Math.min(attempts - 1, RETRY_DELAYS_MS.length - 1)] || RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+  retryStates.set(key, {
+    date: today,
+    attempts,
+    nextRetryAt: Date.now() + delay
+  });
+  if (attempts >= MAX_RETRY_COUNT) {
+    await markDone();
+    retryStates.delete(key);
+    console.error(`[notification-scheduler] reached retry limit for ${key}, stop retrying today`);
+  }
+}
+
+function clearRetry(key: string) {
+  retryStates.delete(key);
 }
 
 async function buildSchedulerUser(): Promise<AuthUser | undefined> {
@@ -94,9 +133,18 @@ async function tick() {
     if (settings.enabled && settings.lastScheduledDate !== today && hasReachedTime(currentTime, settings.scheduledTime || '09:00')) {
       const user = await buildSchedulerUser();
       if (user) {
-        console.log(`[notification-scheduler] pushing global dashboard summary at ${currentTime}`);
-        await pushDashboardNotification(user, 'scheduled');
-        await markScheduledSent(today);
+        const key = retryKey('global');
+        if (canRetry(key, today)) {
+          try {
+            console.log(`[notification-scheduler] pushing global dashboard summary at ${currentTime}`);
+            await pushDashboardNotification(user, 'scheduled');
+            await markScheduledSent(today);
+            clearRetry(key);
+          } catch (error) {
+            console.error('Scheduled global notification failed', error);
+            await handleScheduledFailure(key, today, () => markScheduledSent(today));
+          }
+        }
       }
     }
 
@@ -114,12 +162,16 @@ async function tick() {
 
     const users = (await Promise.all(duePersonalTimes.map((scheduledTime) => buildUserSchedulerUsers(scheduledTime, today)))).flat();
     for (const user of users) {
+      const key = retryKey('user', String(user.id));
+      if (!canRetry(key, today)) continue;
       try {
         console.log(`[notification-scheduler] pushing personal dashboard summary for user ${user.id} at ${currentTime}`);
         await pushDashboardNotification(user, `scheduled:user:${user.id}`);
         await markUserScheduledSent(user.id, today);
+        clearRetry(key);
       } catch (error) {
         console.error(`Scheduled user notification failed for user ${user.id}`, error);
+        await handleScheduledFailure(key, today, () => markUserScheduledSent(user.id, today));
       }
     }
   } catch (error) {

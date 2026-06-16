@@ -374,10 +374,14 @@ router.get('/auth/oauth/:provider/callback', async (req, res) => {
     if (payload.provider !== provider) throw new Error('OAuth state 与登录平台不匹配');
     const dataSource = (await listDataSources(provider, true)).find((item) => item.id === payload.dataSourceId && item.enabled);
     if (!dataSource) throw new Error('数据源实例不可用');
+    console.log(`[oauth-callback] fetching identity provider=${provider} dataSource=${dataSource.id}`);
     const identity = await fetchOAuthIdentity(provider, dataSource, code);
+    console.log(`[oauth-callback] identity ready provider=${provider} providerUserId=${identity.providerUserId ? 'yes' : 'no'} unionId=${identity.unionId ? 'yes' : 'no'}`);
+    console.log(`[oauth-callback] building session provider=${provider} dataSource=${dataSource.id}`);
     const result = await loginWithOAuth(provider, dataSource.id, identity);
+    const redirectUrl = frontendCallbackUrl(result.token);
     console.log(`[oauth-callback] success provider=${provider} user=${result.user.displayName} dataSource=${dataSource.id}`);
-    res.redirect(frontendCallbackUrl(result.token));
+    res.redirect(redirectUrl);
   } catch (error: any) {
     console.error('[oauth-callback] failed', error?.message || error);
     res.redirect(frontendLoginErrorUrl(error.message || '企业登录失败'));

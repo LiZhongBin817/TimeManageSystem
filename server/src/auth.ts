@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { Role, getDataSource } from './config/modules';
-import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, updateUserSessionId, upsertOAuthUser } from './db';
+import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, updateUserSessionId, upsertOAuthUser, withPersistenceBatch } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
 
@@ -94,9 +94,11 @@ export async function loginWithOAuth(
     raw?: unknown;
   }
 ) {
-  const user = await upsertOAuthUser({ provider, ...identity });
-  if (!user) throw new Error('创建用户失败');
-  return buildSession(user, dataSourceId, provider);
+  return withPersistenceBatch(async () => {
+    const user = await upsertOAuthUser({ provider, ...identity });
+    if (!user) throw new Error('创建用户失败');
+    return buildSession(user, dataSourceId, provider);
+  });
 }
 
 export function signOAuthState(input: { provider: IdentityProvider; dataSourceId: number; redirectUri: string }) {
