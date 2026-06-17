@@ -7,7 +7,8 @@ import https from 'https';
 import { DataSourceInstance } from '../config/configStore';
 import { IdentityProvider } from '../db';
 
-const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 20000);
+const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 12000);
+const OAUTH_REQUEST_RETRIES = Number(process.env.OAUTH_REQUEST_RETRIES || 2);
 const oauthHttpAgent = new http.Agent({ family: 4 });
 const oauthHttpsAgent = new https.Agent({ family: 4 });
 
@@ -70,7 +71,7 @@ function isTransientOAuthError(error: any) {
 }
 
 // 平台回调流程只重试临时故障，然后再把错误返回登录页。
-async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = 3) {
+async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = OAUTH_REQUEST_RETRIES) {
   let lastError: unknown;
   for (let index = 0; index < attempts; index += 1) {
     try {

@@ -366,7 +366,7 @@ router.get('/auth/oauth/:provider/start', async (req, res, next) => {
 router.get('/auth/oauth/:provider/callback', async (req, res) => {
   try {
     const provider = req.params.provider as 'dingtalk' | 'feishu';
-    const code = String(req.query.code || '');
+    const code = String(req.query.code || req.query.authCode || '');
     const state = String(req.query.state || '');
     console.log(`[oauth-callback] received provider=${provider} code=${code ? 'yes' : 'no'} state=${state ? 'yes' : 'no'}`);
     if (!code || !state) throw new Error('OAuth 回调缺少授权码或 state');

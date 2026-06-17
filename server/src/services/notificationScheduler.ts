@@ -19,6 +19,17 @@ interface RetryState {
 
 const retryStates = new Map<string, RetryState>();
 
+function errorSummary(error: unknown) {
+  const detail = error as any;
+  return {
+    message: detail?.message || String(error),
+    code: detail?.code,
+    status: detail?.response?.status,
+    responseCode: detail?.response?.data?.errcode,
+    responseMessage: detail?.response?.data?.errmsg
+  };
+}
+
 function todayInShanghai() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
 }
@@ -141,7 +152,7 @@ async function tick() {
             await markScheduledSent(today);
             clearRetry(key);
           } catch (error) {
-            console.error('Scheduled global notification failed', error);
+            console.error('Scheduled global notification failed', errorSummary(error));
             await handleScheduledFailure(key, today, () => markScheduledSent(today));
           }
         }
@@ -170,7 +181,7 @@ async function tick() {
         await markUserScheduledSent(user.id, today);
         clearRetry(key);
       } catch (error) {
-        console.error(`Scheduled user notification failed for user ${user.id}`, error);
+        console.error(`Scheduled user notification failed for user ${user.id}`, errorSummary(error));
         await handleScheduledFailure(key, today, () => markUserScheduledSent(user.id, today));
       }
     }
