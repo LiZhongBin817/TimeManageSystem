@@ -30,6 +30,7 @@ import {
   getModulePermission,
   getApiUsageSummary,
   getDingTalkSyncSettings,
+  getRuntimeSettings,
   getSyncOverview,
   invalidateSheetCache,
   importStaffOptionsToAssignments,
@@ -43,6 +44,7 @@ import {
   replaceModulePermissions,
   run,
   saveDingTalkSyncSettings,
+  saveRuntimeSettings,
   upsertEnterpriseMembers,
   updateUser
 } from './db';
@@ -68,6 +70,12 @@ import {
 } from './services/rowAccess';
 
 export const router = Router();
+
+function requestBaseUrl(req: any) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return host ? `${proto}://${host}` : '';
+}
 
 // 移除敏感数据库字段，并补充前端易用的登录能力标记。
 function serializeUser(user: any) {
@@ -355,7 +363,8 @@ router.get('/auth/oauth/:provider/start', async (req, res, next) => {
       res.status(400).json({ message: '该数据源未启用企业登录' });
       return;
     }
-    const redirectUri = callbackUri(provider, dataSource);
+    const runtimeSettings = await getRuntimeSettings(requestBaseUrl(req));
+    const redirectUri = callbackUri(provider, dataSource, runtimeSettings);
     const state = signOAuthState({ provider, dataSourceId: dataSource.id, redirectUri });
     res.redirect(authUrl(provider, dataSource, redirectUri, state));
   } catch (error) {
@@ -375,16 +384,17 @@ router.get('/auth/oauth/:provider/callback', async (req, res) => {
     const dataSource = (await listDataSources(provider, true)).find((item) => item.id === payload.dataSourceId && item.enabled);
     if (!dataSource) throw new Error('数据源实例不可用');
     console.log(`[oauth-callback] fetching identity provider=${provider} dataSource=${dataSource.id}`);
-    const identity = await fetchOAuthIdentity(provider, dataSource, code);
+    const runtimeSettings = await getRuntimeSettings(requestBaseUrl(req));
+    const identity = await fetchOAuthIdentity(provider, dataSource, code, runtimeSettings);
     console.log(`[oauth-callback] identity ready provider=${provider} providerUserId=${identity.providerUserId ? 'yes' : 'no'} unionId=${identity.unionId ? 'yes' : 'no'}`);
     console.log(`[oauth-callback] building session provider=${provider} dataSource=${dataSource.id}`);
     const result = await loginWithOAuth(provider, dataSource.id, identity);
-    const redirectUrl = frontendCallbackUrl(result.token);
+    const redirectUrl = frontendCallbackUrl(result.token, runtimeSettings);
     console.log(`[oauth-callback] success provider=${provider} user=${result.user.displayName} dataSource=${dataSource.id}`);
     res.redirect(redirectUrl);
   } catch (error: any) {
     console.error('[oauth-callback] failed', error?.message || error);
-    res.redirect(frontendLoginErrorUrl(error.message || '企业登录失败'));
+    res.redirect(frontendLoginErrorUrl(error.message || '企业登录失败', await getRuntimeSettings(requestBaseUrl(req))));
   }
 });
 
@@ -444,6 +454,40 @@ router.put('/admin/dingtalk-sync/settings', async (req, res, next) => {
       return;
     }
     res.json({ settings: await saveDingTalkSyncSettings(parsed.data) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/admin/runtime/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can view runtime settings' });
+      return;
+    }
+    res.json({ settings: await getRuntimeSettings(requestBaseUrl(req)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/admin/runtime/settings', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can update runtime settings' });
+      return;
+    }
+    const parsed = z.object({
+      publicBaseUrl: z.string().optional().default(''),
+      frontendBaseUrl: z.string().optional().default(''),
+      oauthRequestTimeout: z.number().int().min(1000).max(60000).optional(),
+      oauthRequestRetries: z.number().int().min(0).max(5).optional()
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: 'Invalid runtime settings' });
+      return;
+    }
+    res.json({ settings: await saveRuntimeSettings(parsed.data) });
   } catch (error) {
     next(error);
   }

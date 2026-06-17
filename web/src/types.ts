@@ -204,3 +204,13 @@ export interface DingTalkSyncSettings {
   startupSyncEnabled: boolean;
   startupDelayMs: number;
 }
+
+export interface RuntimeSettings {
+  publicBaseUrl: string;
+  frontendBaseUrl: string;
+  resolvedPublicBaseUrl: string;
+  resolvedFrontendBaseUrl: string;
+  oauthRequestTimeout: number;
+  oauthRequestRetries: number;
+  currentAccessBaseUrl?: string;
+}

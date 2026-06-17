@@ -17,6 +17,7 @@ import {
   getReferenceModules,
   getSyncOverview,
   getDingTalkSyncSettings,
+  getRuntimeSettings,
   getUsers,
   hardDeleteDataSourceInstance,
   initializeStaffAssignments,
@@ -24,6 +25,7 @@ import {
   refreshApiCache,
   saveConfigModule,
   saveDingTalkSyncSettings,
+  saveRuntimeSettings,
   saveDataSourceInstance,
   saveModuleFields,
   saveNotificationSettings,
@@ -47,6 +49,7 @@ import type {
   NotificationLog,
   NotificationSettings,
   NotificationUserSettings,
+  RuntimeSettings,
   PermissionSubjectType,
   Role,
   SyncOverview,
@@ -81,6 +84,7 @@ const syncOverview = ref<SyncOverview | null>(null);
 const cacheRefreshing = ref(false);
 const dingTalkSyncing = ref(false);
 const syncSettingsSaving = ref(false);
+const runtimeSettingsSaving = ref(false);
 const me = ref<User>();
 const activeTab = ref('sources');
 const permissionSubjectType = ref<PermissionSubjectType>('user');
@@ -115,6 +119,15 @@ const dingTalkSyncForm = reactive<DingTalkSyncSettings>({
   scheduledTime: '02:00',
   startupSyncEnabled: true,
   startupDelayMs: 15000
+});
+const runtimeForm = reactive<RuntimeSettings>({
+  publicBaseUrl: '',
+  frontendBaseUrl: '',
+  resolvedPublicBaseUrl: '',
+  resolvedFrontendBaseUrl: '',
+  oauthRequestTimeout: 12000,
+  oauthRequestRetries: 2,
+  currentAccessBaseUrl: ''
 });
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
@@ -301,6 +314,7 @@ async function load() {
       apiUsage.value = await getApiUsage('dingtalk');
       syncOverview.value = await getSyncOverview();
       Object.assign(dingTalkSyncForm, await getDingTalkSyncSettings());
+      Object.assign(runtimeForm, await getRuntimeSettings());
       if (!permissionSubjectId.value) permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : 'admin';
       await loadPermissions();
     }
@@ -324,6 +338,29 @@ async function submitDingTalkSyncSettings() {
   } finally {
     syncSettingsSaving.value = false;
   }
+}
+
+async function submitRuntimeSettings() {
+  runtimeSettingsSaving.value = true;
+  try {
+    Object.assign(runtimeForm, await saveRuntimeSettings({
+      publicBaseUrl: runtimeForm.publicBaseUrl.trim(),
+      frontendBaseUrl: runtimeForm.frontendBaseUrl.trim(),
+      oauthRequestTimeout: Number(runtimeForm.oauthRequestTimeout) || 12000,
+      oauthRequestRetries: Number(runtimeForm.oauthRequestRetries) || 0
+    }));
+    ElMessage.success('运行配置已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '运行配置保存失败');
+  } finally {
+    runtimeSettingsSaving.value = false;
+  }
+}
+
+function useCurrentAccessBaseUrl() {
+  const currentBaseUrl = window.location.origin;
+  runtimeForm.publicBaseUrl = currentBaseUrl;
+  runtimeForm.frontendBaseUrl = currentBaseUrl;
 }
 
 async function refreshUsage() {
@@ -827,6 +864,33 @@ onMounted(load);
         </el-tab-pane>
 
         <el-tab-pane v-if="isAdmin" label="接口与同步" name="api-usage">
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>运行配置</h2>
+              <span>留空时自动跟随当前访问地址，适合 WSL IP 变化场景。</span>
+            </div>
+            <el-form label-position="top" class="sync-settings-form">
+              <div class="sync-settings-grid">
+                <el-form-item label="对外访问地址">
+                  <el-input v-model="runtimeForm.publicBaseUrl" placeholder="http://172.23.74.232:8888" />
+                </el-form-item>
+                <el-form-item label="前端访问地址">
+                  <el-input v-model="runtimeForm.frontendBaseUrl" placeholder="http://172.23.74.232:8888" />
+                </el-form-item>
+                <el-form-item label="OAuth 超时时间(毫秒)">
+                  <el-input-number v-model="runtimeForm.oauthRequestTimeout" class="full-field" :min="1000" :max="60000" :step="1000" />
+                </el-form-item>
+                <el-form-item label="OAuth 重试次数">
+                  <el-input-number v-model="runtimeForm.oauthRequestRetries" class="full-field" :min="0" :max="5" />
+                </el-form-item>
+              </div>
+              <div class="settings-actions">
+                <el-button @click="useCurrentAccessBaseUrl">使用当前访问地址</el-button>
+                <el-button type="primary" :loading="runtimeSettingsSaving" @click="submitRuntimeSettings">保存运行配置</el-button>
+              </div>
+              <div class="field-help">当前解析：{{ runtimeForm.resolvedPublicBaseUrl || '-' }} / {{ runtimeForm.resolvedFrontendBaseUrl || '-' }}</div>
+            </el-form>
+          </section>
           <div class="settings-actions">
             <el-button :icon="Refresh" @click="refreshUsage">刷新统计</el-button>
             <el-button type="warning" :loading="cacheRefreshing" @click="clearDingTalkCache">清理钉钉缓存</el-button>

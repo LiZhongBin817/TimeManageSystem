@@ -132,6 +132,16 @@ export interface DingTalkSyncSettings {
   startupDelayMs: number;
 }
 
+export interface RuntimeSettings {
+  publicBaseUrl: string;
+  frontendBaseUrl: string;
+  resolvedPublicBaseUrl: string;
+  resolvedFrontendBaseUrl: string;
+  oauthRequestTimeout: number;
+  oauthRequestRetries: number;
+  currentAccessBaseUrl?: string;
+}
+
 const dbPath = process.env.DB_PATH
   ? path.resolve(process.env.DB_PATH)
   : path.resolve(__dirname, '..', 'server-data.db');
@@ -1660,6 +1670,76 @@ function boolSetting(value: string | undefined, fallback: boolean) {
 function normalizeTimeSetting(value: string | undefined, fallback = '02:00') {
   const text = String(value || fallback).trim();
   return /^\d{2}:\d{2}$/.test(text) ? text : fallback;
+}
+
+function normalizeUrlSetting(value: string | undefined) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function numberSetting(value: string | undefined, fallback: number, min: number, max: number) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(numberValue)));
+}
+
+export async function getRuntimeSettings(currentAccessBaseUrl = ''): Promise<RuntimeSettings> {
+  const rows = await all<{ key: string; value: string }>("SELECT key, value FROM system_settings WHERE key LIKE 'runtime.%'");
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const publicBaseUrl = normalizeUrlSetting(values.get('runtime.publicBaseUrl'));
+  const frontendBaseUrl = normalizeUrlSetting(values.get('runtime.frontendBaseUrl'));
+  const envPublicBaseUrl = normalizeUrlSetting(process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL);
+  const envFrontendBaseUrl = normalizeUrlSetting(process.env.FRONTEND_BASE_URL);
+  const requestBaseUrl = normalizeUrlSetting(currentAccessBaseUrl);
+  const resolvedPublicBaseUrl = publicBaseUrl || envPublicBaseUrl || requestBaseUrl || 'http://localhost:4000';
+  const resolvedFrontendBaseUrl = frontendBaseUrl || envFrontendBaseUrl || resolvedPublicBaseUrl;
+  const oauthRequestTimeout = numberSetting(
+    values.get('runtime.oauthRequestTimeout') || process.env.OAUTH_REQUEST_TIMEOUT,
+    12000,
+    1000,
+    60000
+  );
+  const oauthRequestRetries = numberSetting(
+    values.get('runtime.oauthRequestRetries') || process.env.OAUTH_REQUEST_RETRIES,
+    2,
+    0,
+    5
+  );
+
+  return {
+    publicBaseUrl,
+    frontendBaseUrl,
+    resolvedPublicBaseUrl,
+    resolvedFrontendBaseUrl,
+    oauthRequestTimeout,
+    oauthRequestRetries,
+    currentAccessBaseUrl: requestBaseUrl
+  };
+}
+
+export async function saveRuntimeSettings(input: Partial<RuntimeSettings>) {
+  const current = await getRuntimeSettings();
+  const next = {
+    publicBaseUrl: normalizeUrlSetting(input.publicBaseUrl ?? current.publicBaseUrl),
+    frontendBaseUrl: normalizeUrlSetting(input.frontendBaseUrl ?? current.frontendBaseUrl),
+    oauthRequestTimeout: String(numberSetting(String(input.oauthRequestTimeout ?? current.oauthRequestTimeout), 12000, 1000, 60000)),
+    oauthRequestRetries: String(numberSetting(String(input.oauthRequestRetries ?? current.oauthRequestRetries), 2, 0, 5))
+  };
+  await withPersistenceBatch(() => {
+    Object.entries({
+      'runtime.publicBaseUrl': next.publicBaseUrl,
+      'runtime.frontendBaseUrl': next.frontendBaseUrl,
+      'runtime.oauthRequestTimeout': next.oauthRequestTimeout,
+      'runtime.oauthRequestRetries': next.oauthRequestRetries
+    }).forEach(([key, value]) => {
+      run(
+        `INSERT INTO system_settings (key, value, updated_at)
+         VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+        [key, value]
+      );
+    });
+  });
+  return getRuntimeSettings();
 }
 
 export async function getDingTalkSyncSettings(): Promise<DingTalkSyncSettings> {

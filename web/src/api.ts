@@ -17,6 +17,7 @@ import type {
   PlatformKey,
   ApiUsageSummary,
   DingTalkSyncSettings,
+  RuntimeSettings,
   SheetRow,
   SyncOverview,
   StaffMember,
@@ -105,6 +106,16 @@ export async function getDingTalkSyncSettings() {
 
 export async function saveDingTalkSyncSettings(settings: DingTalkSyncSettings) {
   const { data } = await api.put<{ settings: DingTalkSyncSettings }>('/admin/dingtalk-sync/settings', settings);
+  return data.settings;
+}
+
+export async function getRuntimeSettings() {
+  const { data } = await api.get<{ settings: RuntimeSettings }>('/admin/runtime/settings');
+  return data.settings;
+}
+
+export async function saveRuntimeSettings(settings: Partial<RuntimeSettings>) {
+  const { data } = await api.put<{ settings: RuntimeSettings }>('/admin/runtime/settings', settings);
   return data.settings;
 }
 

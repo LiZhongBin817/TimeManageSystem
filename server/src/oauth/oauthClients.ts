@@ -5,10 +5,8 @@ import axios from 'axios';
 import http from 'http';
 import https from 'https';
 import { DataSourceInstance } from '../config/configStore';
-import { IdentityProvider } from '../db';
+import { IdentityProvider, RuntimeSettings } from '../db';
 
-const OAUTH_REQUEST_TIMEOUT = Number(process.env.OAUTH_REQUEST_TIMEOUT || 12000);
-const OAUTH_REQUEST_RETRIES = Number(process.env.OAUTH_REQUEST_RETRIES || 2);
 const oauthHttpAgent = new http.Agent({ family: 4 });
 const oauthHttpsAgent = new https.Agent({ family: 4 });
 
@@ -16,6 +14,7 @@ interface FetchJsonOptions {
   method?: string;
   headers?: Record<string, string>;
   body?: unknown;
+  timeout?: number;
 }
 
 // OAuth HTTP 调用单独设置超时和日志，便于诊断回调失败。
@@ -30,7 +29,7 @@ async function fetchJson(url: string, options: FetchJsonOptions = {}) {
         ...(options.headers || {})
       },
       data: options.body,
-      timeout: OAUTH_REQUEST_TIMEOUT,
+      timeout: options.timeout ?? 12000,
       httpAgent: oauthHttpAgent,
       httpsAgent: oauthHttpsAgent,
       validateStatus: () => true
@@ -71,7 +70,7 @@ function isTransientOAuthError(error: any) {
 }
 
 // 平台回调流程只重试临时故障，然后再把错误返回登录页。
-async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = OAUTH_REQUEST_RETRIES) {
+async function fetchJsonWithRetry(label: string, url: string, options: FetchJsonOptions = {}, attempts = 2) {
   let lastError: unknown;
   for (let index = 0; index < attempts; index += 1) {
     try {
@@ -120,10 +119,6 @@ function oauthError(label: string, error: unknown) {
   return error instanceof Error ? error : new Error(`${label}失败`);
 }
 
-function publicBaseUrl() {
-  return process.env.PUBLIC_BASE_URL || process.env.SERVER_PUBLIC_BASE_URL || 'http://localhost:4000';
-}
-
 // 规范化误带的 /api 后缀，确保生成的回调 URL 符合平台要求。
 function normalizePublicBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '');
@@ -154,18 +149,18 @@ function normalizeCallbackUri(value: string, provider: IdentityProvider) {
   }
 }
 
-export function callbackUri(provider: IdentityProvider, dataSource: DataSourceInstance) {
-  const redirectUri = dataSource.config.redirectUri || `${normalizePublicBaseUrl(publicBaseUrl())}/api/auth/oauth/${provider}/callback`;
+export function callbackUri(provider: IdentityProvider, dataSource: DataSourceInstance, runtimeSettings: RuntimeSettings) {
+  const redirectUri = dataSource.config.redirectUri || `${normalizePublicBaseUrl(runtimeSettings.resolvedPublicBaseUrl)}/api/auth/oauth/${provider}/callback`;
   return normalizeCallbackUri(redirectUri, provider);
 }
 
-export function frontendCallbackUrl(token: string) {
-  const base = process.env.FRONTEND_BASE_URL || 'http://localhost:5173';
+export function frontendCallbackUrl(token: string, runtimeSettings: RuntimeSettings) {
+  const base = runtimeSettings.resolvedFrontendBaseUrl;
   return `${base}/oauth/callback?token=${encodeURIComponent(token)}`;
 }
 
-export function frontendLoginErrorUrl(message: string) {
-  const base = process.env.FRONTEND_BASE_URL || 'http://localhost:5173';
+export function frontendLoginErrorUrl(message: string, runtimeSettings: RuntimeSettings) {
+  const base = runtimeSettings.resolvedFrontendBaseUrl;
   return `${base}/login?force=1&oauthError=${encodeURIComponent(message)}`;
 }
 
@@ -200,34 +195,36 @@ export function authUrl(provider: IdentityProvider, dataSource: DataSourceInstan
   return url.toString();
 }
 
-export async function fetchOAuthIdentity(provider: IdentityProvider, dataSource: DataSourceInstance, code: string): Promise<OAuthIdentity> {
-  if (provider === 'dingtalk') return fetchDingTalkIdentity(dataSource, code);
+export async function fetchOAuthIdentity(provider: IdentityProvider, dataSource: DataSourceInstance, code: string, runtimeSettings: RuntimeSettings): Promise<OAuthIdentity> {
+  if (provider === 'dingtalk') return fetchDingTalkIdentity(dataSource, code, runtimeSettings);
   return fetchFeishuIdentity(dataSource, code);
 }
 
 // 用钉钉授权码换取认证和数据库层使用的标准身份结构。
-async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: string): Promise<OAuthIdentity> {
+async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: string, runtimeSettings: RuntimeSettings): Promise<OAuthIdentity> {
   const appKey = requireConfig(dataSource.config.appKey, '钉钉 AppKey');
   const appSecret = requireConfig(dataSource.config.appSecret, '钉钉 AppSecret');
   const baseUrl = dataSource.config.baseUrl || 'https://api.dingtalk.com';
 
   const tokenResponse = await fetchJsonWithRetry('DingTalk user token', `${baseUrl}/v1.0/oauth2/userAccessToken`, {
     method: 'POST',
+    timeout: runtimeSettings.oauthRequestTimeout,
     body: {
       clientId: appKey,
       clientSecret: appSecret,
       code,
       grantType: 'authorization_code'
     }
-  }).catch((error) => {
+  }, runtimeSettings.oauthRequestRetries).catch((error) => {
     throw oauthError('钉钉授权码换取用户 token', error);
   });
   const userAccessToken = tokenResponse.data?.accessToken;
   if (!userAccessToken) throw new Error('钉钉用户 accessToken 获取失败');
 
   const userResponse = await fetchJsonWithRetry('DingTalk current user', `${baseUrl}/v1.0/contact/users/me`, {
+    timeout: runtimeSettings.oauthRequestTimeout,
     headers: { 'x-acs-dingtalk-access-token': userAccessToken }
-  }).catch((error) => {
+  }, runtimeSettings.oauthRequestRetries).catch((error) => {
     throw oauthError('钉钉获取当前用户信息', error);
   });
   const user = userResponse.data || {};
