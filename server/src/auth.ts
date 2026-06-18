@@ -9,6 +9,7 @@ import { Role, getDataSource } from './config/modules';
 import { IdentityProvider, UserRecord, findUserById, findUserByLoginNameOrUsername, getUserDataSourcePreference, updateUserSessionId, upsertOAuthUser, withPersistenceBatch } from './db';
 
 const jwtSecret = process.env.JWT_SECRET || 'dev-secret';
+const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '8h';
 
 export interface AuthUser {
   id: number;
@@ -68,7 +69,7 @@ async function buildSession(user: UserRecord, dataSourceId: number, provider: Au
 
   return {
     user: payload,
-    token: jwt.sign(payload, jwtSecret, { expiresIn: '8h' })
+    token: jwt.sign(payload, jwtSecret, { expiresIn: jwtExpiresIn } as jwt.SignOptions)
   };
 }
 
