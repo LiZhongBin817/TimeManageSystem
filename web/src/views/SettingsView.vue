@@ -13,6 +13,7 @@ import {
   getNotificationLogs,
   getNotificationSettings,
   getNotificationUserSettings,
+  getPlatformConfigs,
   getPermissions,
   getReferenceModules,
   getSyncOverview,
@@ -30,6 +31,7 @@ import {
   saveModuleFields,
   saveNotificationSettings,
   saveNotificationUserSettings,
+  savePlatformConfigs,
   savePermissions,
   sendNotificationTest,
   syncDingTalkNow,
@@ -51,6 +53,7 @@ import type {
   NotificationUserSettings,
   RuntimeSettings,
   PermissionSubjectType,
+  PlatformConfigs,
   Role,
   SyncOverview,
   User
@@ -85,6 +88,7 @@ const cacheRefreshing = ref(false);
 const dingTalkSyncing = ref(false);
 const syncSettingsSaving = ref(false);
 const runtimeSettingsSaving = ref(false);
+const platformConfigsSaving = ref(false);
 const me = ref<User>();
 const activeTab = ref('sources');
 const permissionSubjectType = ref<PermissionSubjectType>('user');
@@ -102,9 +106,14 @@ const sourceForm = reactive<DataSourceInstance>(emptySource());
 const moduleForm = reactive<ModuleConfig>(emptyModule());
 const userForm = reactive<UserFormState>(emptyUserForm());
 const notificationForm = reactive<NotificationSettings>({
+  channel: 'dingtalk_robot',
   enabled: false,
   webhookUrl: '',
   secret: '',
+  dingtalkWebhookUrl: '',
+  dingtalkSecret: '',
+  feishuWebhookUrl: '',
+  feishuSecret: '',
   keywords: ['项目提醒'],
   scheduledTime: '09:00',
   lastScheduledDate: ''
@@ -128,6 +137,21 @@ const runtimeForm = reactive<RuntimeSettings>({
   oauthRequestTimeout: 12000,
   oauthRequestRetries: 2,
   currentAccessBaseUrl: ''
+});
+const platformConfigForm = reactive<PlatformConfigs>({
+  dingtalk: {
+    appKey: '',
+    appSecret: '',
+    corpId: '',
+    realmCorpId: '',
+    baseUrl: 'https://api.dingtalk.com',
+    operatorId: ''
+  },
+  feishu: {
+    appId: '',
+    appSecret: '',
+    baseUrl: 'https://open.feishu.cn'
+  }
 });
 
 const fieldTypes: FieldType[] = ['text', 'number', 'date', 'link', 'status', 'staff', 'formula', 'hidden'];
@@ -170,6 +194,34 @@ const roleOptions: Array<{ label: string; value: Role }> = [
 const permissionSubjectOptions = computed(() => {
   if (permissionSubjectType.value === 'role') return roleOptions;
   return users.value.map((user) => ({ label: `${user.displayName}（${user.role}）`, value: String(user.id) }));
+});
+const notificationWebhookModel = computed({
+  get() {
+    return notificationForm.channel === 'feishu_robot'
+      ? notificationForm.feishuWebhookUrl
+      : notificationForm.dingtalkWebhookUrl;
+  },
+  set(value: string) {
+    if (notificationForm.channel === 'feishu_robot') {
+      notificationForm.feishuWebhookUrl = value;
+      return;
+    }
+    notificationForm.dingtalkWebhookUrl = value;
+  }
+});
+const notificationSecretModel = computed({
+  get() {
+    return notificationForm.channel === 'feishu_robot'
+      ? notificationForm.feishuSecret
+      : notificationForm.dingtalkSecret;
+  },
+  set(value: string) {
+    if (notificationForm.channel === 'feishu_robot') {
+      notificationForm.feishuSecret = value;
+      return;
+    }
+    notificationForm.dingtalkSecret = value;
+  }
 });
 
 function formatShanghaiTime(value: unknown) {
@@ -215,6 +267,14 @@ function loginMethodTagType(row: ManagedUser) {
   if (row.loginMethod === 'local' || row.hasLocalLogin) return '';
   if (row.loginMethod === 'enterprise' || row.hasEnterpriseLogin) return 'info';
   return 'warning';
+}
+
+function identityProviderText(row: ManagedUser) {
+  const providers = row.identityProviders || [];
+  if (!providers.length) return '未绑定';
+  return providers
+    .map((provider) => provider === 'feishu' ? '飞书' : '钉钉')
+    .join(' / ');
 }
 
 function emptySource(): DataSourceInstance {
@@ -315,6 +375,7 @@ async function load() {
       syncOverview.value = await getSyncOverview();
       Object.assign(dingTalkSyncForm, await getDingTalkSyncSettings());
       Object.assign(runtimeForm, await getRuntimeSettings());
+      Object.assign(platformConfigForm, await getPlatformConfigs());
       if (!permissionSubjectId.value) permissionSubjectId.value = users.value[0] ? String(users.value[0].id) : 'admin';
       await loadPermissions();
     }
@@ -354,6 +415,32 @@ async function submitRuntimeSettings() {
     ElMessage.error(error.response?.data?.message || '运行配置保存失败');
   } finally {
     runtimeSettingsSaving.value = false;
+  }
+}
+
+async function submitPlatformConfigs() {
+  platformConfigsSaving.value = true;
+  try {
+    Object.assign(platformConfigForm, await savePlatformConfigs({
+      dingtalk: {
+        appKey: platformConfigForm.dingtalk.appKey.trim(),
+        appSecret: platformConfigForm.dingtalk.appSecret.trim(),
+        corpId: platformConfigForm.dingtalk.corpId.trim(),
+        realmCorpId: platformConfigForm.dingtalk.realmCorpId.trim(),
+        baseUrl: platformConfigForm.dingtalk.baseUrl.trim(),
+        operatorId: platformConfigForm.dingtalk.operatorId.trim()
+      },
+      feishu: {
+        appId: platformConfigForm.feishu.appId.trim(),
+        appSecret: platformConfigForm.feishu.appSecret.trim(),
+        baseUrl: platformConfigForm.feishu.baseUrl.trim()
+      }
+    }));
+    ElMessage.success('平台配置已保存');
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '平台配置保存失败');
+  } finally {
+    platformConfigsSaving.value = false;
   }
 }
 
@@ -427,6 +514,12 @@ async function submitNotificationUserSettings() {
 async function submitNotification() {
   notificationSaving.value = true;
   try {
+    notificationForm.webhookUrl = notificationWebhookModel.value.trim();
+    notificationForm.secret = notificationSecretModel.value.trim();
+    notificationForm.dingtalkWebhookUrl = notificationForm.dingtalkWebhookUrl.trim();
+    notificationForm.dingtalkSecret = notificationForm.dingtalkSecret.trim();
+    notificationForm.feishuWebhookUrl = notificationForm.feishuWebhookUrl.trim();
+    notificationForm.feishuSecret = notificationForm.feishuSecret.trim();
     notificationForm.keywords = notificationForm.keywords.map((item) => item.trim()).filter(Boolean);
     if (!notificationForm.keywords.length) notificationForm.keywords = ['项目提醒'];
     Object.assign(notificationForm, await saveNotificationSettings(notificationForm));
@@ -450,7 +543,7 @@ function removeNotificationKeyword(index: number) {
 async function testNotification() {
   notificationTesting.value = true;
   try {
-    await sendNotificationTest();
+    await sendNotificationTest(notificationForm.channel);
     ElMessage.success('测试消息已发送');
     await loadNotificationConfig();
   } catch (error: any) {
@@ -463,8 +556,9 @@ async function testNotification() {
 async function pushNotificationNow() {
   notificationPushing.value = true;
   try {
-    const result = await pushDashboardNotification();
-    ElMessage.success(`已推送到钉钉：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
+    const result = await pushDashboardNotification(notificationForm.channel);
+    const channelText = notificationForm.channel === 'feishu_robot' ? '飞书' : '钉钉';
+    ElMessage.success(`已推送到${channelText}：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
     await loadNotificationConfig();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '推送失败');
@@ -891,6 +985,48 @@ onMounted(load);
               <div class="field-help">当前解析：{{ runtimeForm.resolvedPublicBaseUrl || '-' }} / {{ runtimeForm.resolvedFrontendBaseUrl || '-' }}</div>
             </el-form>
           </section>
+          <section class="dashboard-section">
+            <div class="section-heading">
+              <h2>平台配置</h2>
+              <span>维护钉钉、飞书应用级公共信息，新增数据源实例时不需要重复填写。</span>
+            </div>
+            <el-form label-position="top" class="sync-settings-form">
+              <h3 class="form-subtitle">钉钉应用</h3>
+              <div class="sync-settings-grid">
+                <el-form-item label="AppKey / Client ID">
+                  <el-input v-model="platformConfigForm.dingtalk.appKey" />
+                </el-form-item>
+                <el-form-item label="AppSecret / Client Secret">
+                  <el-input v-model="platformConfigForm.dingtalk.appSecret" show-password />
+                </el-form-item>
+                <el-form-item label="企业 CorpId">
+                  <el-input v-model="platformConfigForm.dingtalk.corpId" placeholder="可选，建议填写" />
+                </el-form-item>
+                <el-form-item label="Realm CorpId">
+                  <el-input v-model="platformConfigForm.dingtalk.realmCorpId" placeholder="可选，通常与 CorpId 一致" />
+                </el-form-item>
+                <el-form-item label="接口 BaseUrl">
+                  <el-input v-model="platformConfigForm.dingtalk.baseUrl" placeholder="https://api.dingtalk.com" />
+                </el-form-item>
+                <el-form-item label="备用 OperatorId">
+                  <el-input v-model="platformConfigForm.dingtalk.operatorId" placeholder="可不填，优先使用登录用户身份" />
+                </el-form-item>
+              </div>
+              <h3 class="form-subtitle">飞书应用</h3>
+              <div class="sync-settings-grid">
+                <el-form-item label="AppId">
+                  <el-input v-model="platformConfigForm.feishu.appId" />
+                </el-form-item>
+                <el-form-item label="AppSecret">
+                  <el-input v-model="platformConfigForm.feishu.appSecret" show-password />
+                </el-form-item>
+                <el-form-item label="接口 BaseUrl">
+                  <el-input v-model="platformConfigForm.feishu.baseUrl" placeholder="https://open.feishu.cn" />
+                </el-form-item>
+              </div>
+              <el-button type="primary" :loading="platformConfigsSaving" @click="submitPlatformConfigs">保存平台配置</el-button>
+            </el-form>
+          </section>
           <div class="settings-actions">
             <el-button :icon="Refresh" @click="refreshUsage">刷新统计</el-button>
             <el-button type="warning" :loading="cacheRefreshing" @click="clearDingTalkCache">清理钉钉缓存</el-button>
@@ -1032,6 +1168,12 @@ onMounted(load);
                 <el-form-item label="启用定时推送">
                   <el-switch v-model="notificationForm.enabled" :disabled="!isAdmin" />
                 </el-form-item>
+                <el-form-item label="机器人平台">
+                  <el-select v-model="notificationForm.channel" class="full-field" :disabled="!isAdmin">
+                    <el-option label="钉钉机器人" value="dingtalk_robot" />
+                    <el-option label="飞书机器人" value="feishu_robot" />
+                  </el-select>
+                </el-form-item>
                 <el-form-item label="每日推送时间">
                   <el-time-picker
                     v-model="notificationForm.scheduledTime"
@@ -1041,11 +1183,22 @@ onMounted(load);
                     :disabled="!isAdmin"
                   />
                 </el-form-item>
-                <el-form-item label="钉钉机器人 Webhook">
-                  <el-input v-model="notificationForm.webhookUrl" :disabled="!isAdmin" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." />
+                <el-form-item :label="notificationForm.channel === 'feishu_robot' ? '飞书机器人 Webhook' : '钉钉机器人 Webhook'">
+                  <el-input
+                    v-model="notificationWebhookModel"
+                    :disabled="!isAdmin"
+                    :placeholder="notificationForm.channel === 'feishu_robot'
+                      ? 'https://open.feishu.cn/open-apis/bot/v2/hook/...'
+                      : 'https://oapi.dingtalk.com/robot/send?access_token=...'"
+                  />
                 </el-form-item>
                 <el-form-item label="加签 Secret">
-                  <el-input v-model="notificationForm.secret" :disabled="!isAdmin" show-password placeholder="SEC..." />
+                  <el-input
+                    v-model="notificationSecretModel"
+                    :disabled="!isAdmin"
+                    show-password
+                    :placeholder="notificationForm.channel === 'feishu_robot' ? '飞书机器人开启签名校验时填写' : 'SEC...'"
+                  />
                 </el-form-item>
                 <el-form-item label="自定义关键词" class="notification-keyword-form">
                   <div class="keyword-list">
@@ -1062,7 +1215,7 @@ onMounted(load);
               v-if="!isAdmin"
               type="info"
               :closable="false"
-              title="机器人 Webhook 和加签密钥由管理员统一维护，你可以配置个人定时推送并立即推送自己的任务汇总。"
+              title="消息机器人 Webhook 和加签密钥由管理员统一维护，你可以配置个人定时推送并立即推送自己的任务汇总。"
             />
             <div class="subsection-title">个人定时推送</div>
             <el-form label-position="top">
@@ -1123,7 +1276,7 @@ onMounted(load);
             <el-table-column label="企业身份" width="130">
               <template #default="{ row }">
                 <el-tag :type="row.hasEnterpriseLogin ? 'success' : 'info'" size="small">
-                  {{ row.hasEnterpriseLogin ? '已绑定钉钉' : '未绑定' }}
+                  {{ identityProviderText(row) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -1267,49 +1420,6 @@ onMounted(load);
             </el-form-item>
           </template>
         </div>
-        <details v-if="isAdmin" class="advanced-source-config">
-          <summary>管理员高级配置：应用级公共信息</summary>
-          <el-alert
-            class="source-help"
-            type="warning"
-            :closable="false"
-            title="这些字段属于同一个应用平台的公共配置。新增同平台实例时可不填，系统会自动继承已有实例或 .env 环境变量。"
-          />
-          <div class="form-grid">
-            <template v-if="sourceForm.platform === 'dingtalk'">
-              <el-form-item label="钉钉 AppKey / Client ID">
-                <el-input v-model="sourceForm.config.appKey" />
-                <div class="field-help">钉钉开放平台“凭证与基础信息”中的 Client ID，用于登录授权和接口调用。</div>
-              </el-form-item>
-              <el-form-item label="钉钉 AppSecret / Client Secret">
-                <el-input v-model="sourceForm.config.appSecret" show-password />
-                <div class="field-help">钉钉应用密钥。新增同平台实例时不填会继承已有值。</div>
-              </el-form-item>
-              <el-form-item label="企业 CorpId">
-                <el-input v-model="sourceForm.config.corpId" placeholder="企业 CorpId，可选但建议填写" />
-                <div class="field-help">企业唯一标识，用于企业登录和同步成员等能力。</div>
-              </el-form-item>
-              <el-form-item label="备用 OperatorId">
-                <el-input v-model="sourceForm.config.operatorId" placeholder="可不填，优先使用登录用户身份" />
-                <div class="field-help">一般不需要手填。系统优先使用当前钉钉登录用户身份；无法识别时才回退到这里或环境变量。</div>
-              </el-form-item>
-            </template>
-            <template v-else>
-              <el-form-item label="飞书 AppId">
-                <el-input v-model="sourceForm.config.appId" />
-                <div class="field-help">飞书开放平台应用凭证。新增同平台实例时不填会继承已有值。</div>
-              </el-form-item>
-              <el-form-item label="飞书 AppSecret">
-                <el-input v-model="sourceForm.config.appSecret" show-password />
-                <div class="field-help">飞书应用密钥，只保存在后端配置中。</div>
-              </el-form-item>
-              <el-form-item label="接口 BaseUrl">
-                <el-input v-model="sourceForm.config.baseUrl" placeholder="https://open.feishu.cn" />
-                <div class="field-help">默认使用飞书开放平台官方地址，私有化或特殊网关场景才需要调整。</div>
-              </el-form-item>
-            </template>
-          </div>
-        </details>
       </el-form>
       <template #footer>
         <el-button @click="sourceDialogOpen = false">取消</el-button>

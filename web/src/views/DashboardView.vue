@@ -45,6 +45,9 @@ const testingItems = computed<ScheduleItem[]>(() => summary.value?.inProgress?.t
 const inProgressTotal = computed(() => developingItems.value.length + testingItems.value.length);
 const totalModules = computed(() => summary.value?.moduleStats?.length || 0);
 const cacheInfo = computed(() => summary.value?.cache || {});
+const currentPlatform = computed(() => summary.value?.source || user.value?.platform);
+const notificationChannel = computed(() => currentPlatform.value === 'feishu' ? 'feishu_robot' : 'dingtalk_robot');
+const notificationPlatformText = computed(() => currentPlatform.value === 'feishu' ? '飞书' : '钉钉');
 // 把按模块统计的研发数据压平成总量和分段条形数据。
 const developerStats = computed(() => {
   const moduleStats = summary.value?.moduleStats || [];
@@ -86,11 +89,11 @@ async function load() {
   }
 }
 
-async function pushToDingTalk() {
+async function pushToCurrentPlatform() {
   pushing.value = true;
   try {
-    const result = await pushDashboardNotification();
-    ElMessage.success(`已推送到钉钉：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
+    const result = await pushDashboardNotification(notificationChannel.value);
+    ElMessage.success(`已推送到${notificationPlatformText.value}：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '推送失败');
   } finally {
@@ -171,8 +174,8 @@ onBeforeUnmount(() => {
         <el-tag v-if="cacheInfo.updatedAt" :type="cacheInfo.stale ? 'warning' : 'success'">
           缓存{{ cacheInfo.stale ? '可能过期' : '正常' }} · 北京时间 {{ formatBeijingTime(cacheInfo.updatedAt) }}
         </el-tag>
-        <el-button v-if="user" type="primary" :icon="Bell" :loading="pushing" @click="pushToDingTalk">
-          推送到钉钉
+        <el-button v-if="user" type="primary" :icon="Bell" :loading="pushing" @click="pushToCurrentPlatform">
+          推送到{{ notificationPlatformText }}
         </el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
     </div>

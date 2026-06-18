@@ -10,9 +10,14 @@ import { all, get, logApiCall, run } from '../db';
 import { buildDashboardSummary, ScheduleItem } from './dashboardSummary';
 
 export interface NotificationSettings {
+  channel: 'dingtalk_robot' | 'feishu_robot';
   enabled: boolean;
   webhookUrl: string;
   secret: string;
+  dingtalkWebhookUrl: string;
+  dingtalkSecret: string;
+  feishuWebhookUrl: string;
+  feishuSecret: string;
   keywords: string[];
   scheduledTime: string;
   lastScheduledDate?: string;
@@ -25,9 +30,12 @@ export interface NotificationUserSettings {
 }
 
 interface NotificationSettingsRow {
+  channel?: string;
   enabled: number;
   webhook_url?: string;
   secret?: string;
+  feishu_webhook_url?: string;
+  feishu_secret?: string;
   keyword_json?: string;
   scheduled_time?: string;
   last_scheduled_date?: string;
@@ -50,9 +58,12 @@ function firstEnvValue(...keys: string[]) {
 
 function envNotificationDefaults() {
   return {
+    channel: (firstEnvValue('NOTIFICATION_CHANNEL') || 'dingtalk_robot') as NotificationSettings['channel'],
     enabled: firstEnvValue('NOTIFICATION_ENABLED', 'DINGTALK_ROBOT_ENABLED') === 'true',
-    webhookUrl: firstEnvValue('DINGTALK_ROBOT_WEBHOOK_URL', 'NOTIFICATION_WEBHOOK_URL'),
-    secret: firstEnvValue('DINGTALK_ROBOT_SECRET', 'NOTIFICATION_SECRET'),
+    dingtalkWebhookUrl: firstEnvValue('DINGTALK_ROBOT_WEBHOOK_URL', 'NOTIFICATION_WEBHOOK_URL'),
+    dingtalkSecret: firstEnvValue('DINGTALK_ROBOT_SECRET', 'NOTIFICATION_SECRET'),
+    feishuWebhookUrl: firstEnvValue('FEISHU_ROBOT_WEBHOOK_URL'),
+    feishuSecret: firstEnvValue('FEISHU_ROBOT_SECRET'),
     scheduledTime: firstEnvValue('NOTIFICATION_SCHEDULED_TIME', 'DINGTALK_ROBOT_SCHEDULED_TIME') || '09:00'
   };
 }
@@ -94,13 +105,23 @@ function parseKeywords(value?: string) {
 
 function normalizeSettings(row?: NotificationSettingsRow): NotificationSettings {
   const envDefaults = envNotificationDefaults();
-  const webhookUrl = row?.webhook_url || envDefaults.webhookUrl;
-  const secret = row?.secret || envDefaults.secret;
+  const channel = row?.channel === 'feishu_robot' ? 'feishu_robot' : envDefaults.channel === 'feishu_robot' ? 'feishu_robot' : 'dingtalk_robot';
+  const dingtalkWebhookUrl = row?.webhook_url || envDefaults.dingtalkWebhookUrl;
+  const dingtalkSecret = row?.secret || envDefaults.dingtalkSecret;
+  const feishuWebhookUrl = row?.feishu_webhook_url || envDefaults.feishuWebhookUrl;
+  const feishuSecret = row?.feishu_secret || envDefaults.feishuSecret;
+  const webhookUrl = channel === 'feishu_robot' ? feishuWebhookUrl : dingtalkWebhookUrl;
+  const secret = channel === 'feishu_robot' ? feishuSecret : dingtalkSecret;
 
   return {
+    channel,
     enabled: Boolean(row?.enabled) || envDefaults.enabled,
     webhookUrl,
     secret,
+    dingtalkWebhookUrl,
+    dingtalkSecret,
+    feishuWebhookUrl,
+    feishuSecret,
     keywords: parseKeywords(row?.keyword_json),
     scheduledTime: row?.scheduled_time || envDefaults.scheduledTime,
     lastScheduledDate: row?.last_scheduled_date || ''
@@ -146,16 +167,22 @@ export async function saveNotificationUserSettings(userId: number, input: Notifi
 
 export async function saveNotificationSettings(input: NotificationSettings) {
   const existing = await getNotificationSettings();
-  const webhookUrl = String(input.webhookUrl || '').trim() || existing.webhookUrl;
-  const secret = String(input.secret || '').trim() || existing.secret;
+  const channel = input.channel === 'feishu_robot' ? 'feishu_robot' : 'dingtalk_robot';
+  const dingtalkWebhookUrl = String(input.dingtalkWebhookUrl || '').trim() || existing.dingtalkWebhookUrl;
+  const dingtalkSecret = String(input.dingtalkSecret || '').trim() || existing.dingtalkSecret;
+  const feishuWebhookUrl = String(input.feishuWebhookUrl || '').trim() || existing.feishuWebhookUrl;
+  const feishuSecret = String(input.feishuSecret || '').trim() || existing.feishuSecret;
 
   run(
-    `INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time, updated_at)
-     VALUES (1, 'dingtalk_robot', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, feishu_webhook_url, feishu_secret, keyword_json, scheduled_time, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(id) DO UPDATE SET
+       channel = excluded.channel,
        enabled = excluded.enabled,
        webhook_url = excluded.webhook_url,
        secret = excluded.secret,
+       feishu_webhook_url = excluded.feishu_webhook_url,
+       feishu_secret = excluded.feishu_secret,
        keyword_json = excluded.keyword_json,
        scheduled_time = excluded.scheduled_time,
        last_scheduled_date = CASE
@@ -166,9 +193,12 @@ export async function saveNotificationSettings(input: NotificationSettings) {
        END,
        updated_at = CURRENT_TIMESTAMP`,
     [
+      channel,
       input.enabled ? 1 : 0,
-      webhookUrl,
-      secret,
+      dingtalkWebhookUrl,
+      dingtalkSecret,
+      feishuWebhookUrl,
+      feishuSecret,
       JSON.stringify((input.keywords || []).map((item) => item.trim()).filter(Boolean)),
       input.scheduledTime || '09:00'
     ]
@@ -225,6 +255,10 @@ function signWebhook(webhookUrl: string, secret: string) {
   const sign = encodeURIComponent(crypto.createHmac('sha256', secret).update(stringToSign).digest('base64'));
   const separator = webhookUrl.includes('?') ? '&' : '?';
   return `${webhookUrl}${separator}timestamp=${timestamp}&sign=${sign}`;
+}
+
+function feishuSign(secret: string, timestamp: number) {
+  return crypto.createHmac('sha256', `${timestamp}\n${secret}`).digest('base64');
 }
 
 function text(value: unknown) {
@@ -327,9 +361,72 @@ async function sendDingTalkMarkdown(settings: NotificationSettings, title: strin
   return data;
 }
 
-function logNotification(action: string, status: 'success' | 'failed', message: string, payload?: unknown, user?: AuthUser) {
+async function sendFeishuMarkdown(settings: NotificationSettings, title: string, markdown: string) {
+  if (!settings.webhookUrl) throw new Error('请先配置飞书机器人 Webhook');
+  const timestamp = Math.floor(Date.now() / 1000);
+  const startedAt = Date.now();
+  const content = withKeywords([title, '', markdown].join('\n'), settings.keywords);
+  let data: any;
+  try {
+    const response = await withRetry(() =>
+      axios.post(settings.webhookUrl, {
+        msg_type: 'text',
+        content: { text: content },
+        ...(settings.secret ? { timestamp: String(timestamp), sign: feishuSign(settings.secret, timestamp) } : {})
+      }, {
+        timeout: NOTIFICATION_REQUEST_TIMEOUT,
+        httpAgent: notificationHttpAgent,
+        httpsAgent: notificationHttpsAgent
+      })
+    );
+    data = response.data;
+    logApiCall({
+      platform: 'feishu',
+      capability: 'robot.webhook',
+      path: 'robot.webhook',
+      statusCode: response.status,
+      durationMs: Date.now() - startedAt,
+      success: !data?.code
+    });
+  } catch (error: any) {
+    logApiCall({
+      platform: 'feishu',
+      capability: 'robot.webhook',
+      path: 'robot.webhook',
+      statusCode: error?.response?.status,
+      durationMs: Date.now() - startedAt,
+      success: false,
+      errorCode: String(error?.response?.data?.code || error?.code || error?.message || 'unknown').slice(0, 120)
+    });
+    throw error;
+  }
+  if (data?.code && data.code !== 0) {
+    if (data.code === 19024) {
+      throw new Error('飞书机器人关键词校验未通过，请确认消息关键词包含在飞书机器人安全设置中');
+    }
+    throw new Error(data.msg || `飞书机器人返回错误：${data.code}`);
+  }
+  return data;
+}
+
+async function sendRobotMarkdown(settings: NotificationSettings, title: string, markdown: string) {
+  if (settings.channel === 'feishu_robot') return sendFeishuMarkdown(settings, title, markdown);
+  return sendDingTalkMarkdown(settings, title, markdown);
+}
+
+function withNotificationChannel(settings: NotificationSettings, channel?: NotificationSettings['channel']): NotificationSettings {
+  if (!channel || channel === settings.channel) return settings;
+  return {
+    ...settings,
+    channel,
+    webhookUrl: channel === 'feishu_robot' ? settings.feishuWebhookUrl : settings.dingtalkWebhookUrl,
+    secret: channel === 'feishu_robot' ? settings.feishuSecret : settings.dingtalkSecret
+  };
+}
+
+function logNotification(settings: NotificationSettings, action: string, status: 'success' | 'failed', message: string, payload?: unknown, user?: AuthUser) {
   run('INSERT INTO notification_logs (channel, action, status, user_id, user_display_name, message, payload) VALUES (?, ?, ?, ?, ?, ?, ?)', [
-    'dingtalk_robot',
+    settings.channel,
     action,
     status,
     user?.id ?? null,
@@ -339,25 +436,25 @@ function logNotification(action: string, status: 'success' | 'failed', message: 
   ]);
 }
 
-export async function sendTestNotification(user?: AuthUser) {
-  const settings = await getNotificationSettings();
+export async function sendTestNotification(user?: AuthUser, channel?: NotificationSettings['channel']) {
+  const settings = withNotificationChannel(await getNotificationSettings(), channel);
   try {
-    const result = await sendDingTalkMarkdown(settings, '任务管理系统测试消息', '## 任务管理系统测试消息\n钉钉机器人配置成功。');
-    logNotification('test', 'success', '测试消息发送成功', result, user);
+    const result = await sendRobotMarkdown(settings, '任务管理系统测试消息', `## 任务管理系统测试消息\n${settings.channel === 'feishu_robot' ? '飞书' : '钉钉'}机器人配置成功。`);
+    logNotification(settings, 'test', 'success', '测试消息发送成功', result, user);
     return result;
   } catch (error: any) {
-    logNotification('test', 'failed', error.message || '测试消息发送失败', undefined, user);
+    logNotification(settings, 'test', 'failed', error.message || '测试消息发送失败', undefined, user);
     throw error;
   }
 }
 
-export async function pushDashboardNotification(user: AuthUser, action = 'manual') {
-  const settings = await getNotificationSettings();
+export async function pushDashboardNotification(user: AuthUser, action = 'manual', channel?: NotificationSettings['channel']) {
+  const settings = withNotificationChannel(await getNotificationSettings(), channel);
   try {
     const summary = await buildDashboardSummary(user);
     const message = buildDashboardMarkdown(summary);
-    const result = await sendDingTalkMarkdown(settings, message.title, message.text);
-    logNotification(action, 'success', '汇总消息发送成功', {
+    const result = await sendRobotMarkdown(settings, message.title, message.text);
+    logNotification(settings, action, 'success', '汇总消息发送成功', {
       developing: summary.inProgress.developing,
       testing: summary.inProgress.testing
     }, user);
@@ -369,7 +466,7 @@ export async function pushDashboardNotification(user: AuthUser, action = 'manual
       }
     };
   } catch (error: any) {
-    logNotification(action, 'failed', error.message || '汇总消息发送失败', undefined, user);
+    logNotification(settings, action, 'failed', error.message || '汇总消息发送失败', undefined, user);
     throw error;
   }
 }

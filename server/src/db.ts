@@ -433,6 +433,8 @@ export async function initDatabase() {
     )
   `);
   await ensureColumn('notification_settings', 'keyword_json', 'TEXT');
+  await ensureColumn('notification_settings', 'feishu_webhook_url', 'TEXT');
+  await ensureColumn('notification_settings', 'feishu_secret', 'TEXT');
 
   run(`
     CREATE TABLE IF NOT EXISTS notification_logs (
@@ -721,7 +723,12 @@ export async function listUsers() {
         SELECT COUNT(*)
         FROM user_identities i
         WHERE i.user_id = u.id
-      ) as identity_count
+      ) as identity_count,
+      (
+        SELECT GROUP_CONCAT(DISTINCT i.provider)
+        FROM user_identities i
+        WHERE i.user_id = u.id
+      ) as identity_providers
     FROM users u
     LEFT JOIN user_data_source_preferences p ON p.user_id = u.id
     LEFT JOIN data_source_instances d ON d.id = p.data_source_id

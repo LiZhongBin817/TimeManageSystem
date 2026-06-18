@@ -197,7 +197,7 @@ export function authUrl(provider: IdentityProvider, dataSource: DataSourceInstan
 
 export async function fetchOAuthIdentity(provider: IdentityProvider, dataSource: DataSourceInstance, code: string, runtimeSettings: RuntimeSettings): Promise<OAuthIdentity> {
   if (provider === 'dingtalk') return fetchDingTalkIdentity(dataSource, code, runtimeSettings);
-  return fetchFeishuIdentity(dataSource, code);
+  return fetchFeishuIdentity(dataSource, code, runtimeSettings);
 }
 
 // 用钉钉授权码换取认证和数据库层使用的标准身份结构。
@@ -244,39 +244,42 @@ async function fetchDingTalkIdentity(dataSource: DataSourceInstance, code: strin
 }
 
 // 用飞书授权码换取认证和数据库层使用的标准身份结构。
-async function fetchFeishuIdentity(dataSource: DataSourceInstance, code: string): Promise<OAuthIdentity> {
+async function fetchFeishuIdentity(dataSource: DataSourceInstance, code: string, runtimeSettings: RuntimeSettings): Promise<OAuthIdentity> {
   const appId = requireConfig(dataSource.config.appId, '飞书 AppId');
   const appSecret = requireConfig(dataSource.config.appSecret, '飞书 AppSecret');
   const baseUrl = dataSource.config.baseUrl || 'https://open.feishu.cn';
 
-  const appTokenResponse = await fetchJson(`${baseUrl}/open-apis/auth/v3/app_access_token/internal`, {
+  const appTokenResponse = await fetchJsonWithRetry('Feishu app access token', `${baseUrl}/open-apis/auth/v3/app_access_token/internal`, {
     method: 'POST',
+    timeout: runtimeSettings.oauthRequestTimeout,
     body: {
       app_id: appId,
       app_secret: appSecret
     }
-  }).catch((error) => {
+  }, runtimeSettings.oauthRequestRetries).catch((error) => {
     throw oauthError('飞书获取 app_access_token', error);
   });
   const appAccessToken = appTokenResponse.data?.app_access_token;
   if (!appAccessToken) throw new Error(appTokenResponse.data?.msg || '飞书 app_access_token 获取失败');
 
-  const tokenResponse = await fetchJson(`${baseUrl}/open-apis/authen/v1/oidc/access_token`, {
+  const tokenResponse = await fetchJsonWithRetry('Feishu user access token', `${baseUrl}/open-apis/authen/v1/oidc/access_token`, {
     method: 'POST',
+    timeout: runtimeSettings.oauthRequestTimeout,
     headers: { Authorization: `Bearer ${appAccessToken}` },
     body: {
       grant_type: 'authorization_code',
       code
     }
-  }).catch((error) => {
+  }, runtimeSettings.oauthRequestRetries).catch((error) => {
     throw oauthError('飞书授权码换取用户 token', error);
   });
   const userAccessToken = tokenResponse.data?.data?.access_token || tokenResponse.data?.access_token;
   if (!userAccessToken) throw new Error(tokenResponse.data?.msg || '飞书用户 access_token 获取失败');
 
-  const userResponse = await fetchJson(`${baseUrl}/open-apis/authen/v1/user_info`, {
+  const userResponse = await fetchJsonWithRetry('Feishu current user', `${baseUrl}/open-apis/authen/v1/user_info`, {
+    timeout: runtimeSettings.oauthRequestTimeout,
     headers: { Authorization: `Bearer ${userAccessToken}` }
-  }).catch((error) => {
+  }, runtimeSettings.oauthRequestRetries).catch((error) => {
     throw oauthError('飞书获取当前用户信息', error);
   });
   const user = userResponse.data?.data || userResponse.data || {};

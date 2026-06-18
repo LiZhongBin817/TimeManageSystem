@@ -15,6 +15,7 @@ import type {
   NotificationUserSettings,
   PermissionSubjectType,
   PlatformKey,
+  PlatformConfigs,
   ApiUsageSummary,
   DingTalkSyncSettings,
   RuntimeSettings,
@@ -117,6 +118,16 @@ export async function getRuntimeSettings() {
 export async function saveRuntimeSettings(settings: Partial<RuntimeSettings>) {
   const { data } = await api.put<{ settings: RuntimeSettings }>('/admin/runtime/settings', settings);
   return data.settings;
+}
+
+export async function getPlatformConfigs() {
+  const { data } = await api.get<{ configs: PlatformConfigs }>('/admin/platform-configs');
+  return data.configs;
+}
+
+export async function savePlatformConfigs(configs: PlatformConfigs) {
+  const { data } = await api.put<{ configs: PlatformConfigs }>('/admin/platform-configs', configs);
+  return data.configs;
 }
 
 export async function refreshApiCache(payload: { platform?: PlatformKey; dataSourceId?: number; moduleKey?: string } = {}) {
@@ -333,13 +344,13 @@ export async function saveNotificationUserSettings(settings: NotificationUserSet
   return data.settings;
 }
 
-export async function sendNotificationTest() {
-  const { data } = await api.post('/notification/test');
+export async function sendNotificationTest(channel?: 'dingtalk_robot' | 'feishu_robot') {
+  const { data } = await api.post('/notification/test', { channel });
   return data;
 }
 
-export async function pushDashboardNotification() {
-  const { data } = await api.post<{ summary: { developing: number; testing: number } }>('/notification/push-dashboard');
+export async function pushDashboardNotification(channel?: 'dingtalk_robot' | 'feishu_robot') {
+  const { data } = await api.post<{ summary: { developing: number; testing: number } }>('/notification/push-dashboard', { channel });
   return data;
 }
 

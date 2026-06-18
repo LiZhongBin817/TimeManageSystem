@@ -29,6 +29,7 @@ export interface ManagedUser {
   defaultDataSourceName?: string;
   hasLocalLogin?: boolean;
   hasEnterpriseLogin?: boolean;
+  identityProviders?: PlatformKey[];
   loginMethod?: 'local' | 'enterprise' | 'both' | 'none';
   createdAt?: string;
   updatedAt?: string;
@@ -145,9 +146,14 @@ export interface SheetRow {
 }
 
 export interface NotificationSettings {
+  channel: 'dingtalk_robot' | 'feishu_robot';
   enabled: boolean;
   webhookUrl: string;
   secret: string;
+  dingtalkWebhookUrl: string;
+  dingtalkSecret: string;
+  feishuWebhookUrl: string;
+  feishuSecret: string;
   keywords: string[];
   scheduledTime: string;
   lastScheduledDate?: string;
@@ -213,4 +219,20 @@ export interface RuntimeSettings {
   oauthRequestTimeout: number;
   oauthRequestRetries: number;
   currentAccessBaseUrl?: string;
+}
+
+export interface PlatformConfigs {
+  dingtalk: {
+    appKey: string;
+    appSecret: string;
+    corpId: string;
+    realmCorpId: string;
+    baseUrl: string;
+    operatorId: string;
+  };
+  feishu: {
+    appId: string;
+    appSecret: string;
+    baseUrl: string;
+  };
 }

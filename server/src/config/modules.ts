@@ -6,6 +6,8 @@ export type {
   ModuleField,
   ModuleConfig,
   DataSourceInstance,
+  PlatformConfig,
+  PlatformKey,
   ModuleCategory
 } from './configStore';
 
@@ -15,12 +17,14 @@ export {
   canRead,
   findModule,
   getDataSource,
+  getPlatformConfigs,
   hardDeleteDataSource,
   listDataSources,
   listModules,
   replaceModuleFields,
   rolePermissions,
   saveDataSource,
+  savePlatformConfig,
   saveModule,
   updateModuleSheetId
 } from './configStore';

@@ -10,11 +10,13 @@ import {
   canConfigure,
   findModule,
   getDataSource,
+  getPlatformConfigs,
   hardDeleteDataSource,
   listDataSources,
   listModules,
   replaceModuleFields,
   saveDataSource,
+  savePlatformConfig,
   saveModule,
   updateModuleSheetId
 } from './config/modules';
@@ -81,6 +83,9 @@ function requestBaseUrl(req: any) {
 function serializeUser(user: any) {
   const hasLocalLogin = Boolean(user.password_hash);
   const hasEnterpriseLogin = Number(user.identity_count || 0) > 0;
+  const identityProviders = String(user.identity_providers || '')
+    .split(',')
+    .filter((provider) => provider === 'dingtalk' || provider === 'feishu');
   const loginMethod = hasLocalLogin && hasEnterpriseLogin
     ? 'both'
     : hasLocalLogin
@@ -99,6 +104,7 @@ function serializeUser(user: any) {
     defaultDataSourceName: user.default_data_source_name || '',
     hasLocalLogin,
     hasEnterpriseLogin,
+    identityProviders,
     loginMethod,
     createdAt: user.created_at,
     updatedAt: user.updated_at
@@ -141,6 +147,22 @@ const dataSourceSchema = z.object({
   enabled: z.boolean().default(true),
   sortOrder: z.number().default(0),
   staffTemplateDataSourceId: z.number().int().positive().nullable().optional()
+});
+
+const platformConfigSchema = z.object({
+  dingtalk: z.object({
+    appKey: z.string().optional().default(''),
+    appSecret: z.string().optional().default(''),
+    corpId: z.string().optional().default(''),
+    realmCorpId: z.string().optional().default(''),
+    baseUrl: z.string().optional().default(''),
+    operatorId: z.string().optional().default('')
+  }).optional(),
+  feishu: z.object({
+    appId: z.string().optional().default(''),
+    appSecret: z.string().optional().default(''),
+    baseUrl: z.string().optional().default('')
+  }).optional()
 });
 
 const moduleSchema = z.object({
@@ -488,6 +510,37 @@ router.put('/admin/runtime/settings', async (req, res, next) => {
       return;
     }
     res.json({ settings: await saveRuntimeSettings(parsed.data) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/admin/platform-configs', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can view platform configs' });
+      return;
+    }
+    res.json({ configs: await getPlatformConfigs() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/admin/platform-configs', async (req, res, next) => {
+  try {
+    if (req.user!.role !== 'admin') {
+      res.status(403).json({ message: 'Only admins can update platform configs' });
+      return;
+    }
+    const parsed = platformConfigSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: 'Invalid platform configs' });
+      return;
+    }
+    if (parsed.data.dingtalk) await savePlatformConfig('dingtalk', parsed.data.dingtalk);
+    if (parsed.data.feishu) await savePlatformConfig('feishu', parsed.data.feishu);
+    res.json({ configs: await getPlatformConfigs() });
   } catch (error) {
     next(error);
   }
@@ -850,9 +903,14 @@ router.get('/notification/settings', async (req, res, next) => {
     if (req.user!.role !== 'admin') {
       res.json({
         settings: {
+          channel: settings.channel,
           enabled: settings.enabled,
           webhookUrl: settings.webhookUrl ? 'configured' : '',
           secret: settings.secret ? 'configured' : '',
+          dingtalkWebhookUrl: settings.dingtalkWebhookUrl ? 'configured' : '',
+          dingtalkSecret: settings.dingtalkSecret ? 'configured' : '',
+          feishuWebhookUrl: settings.feishuWebhookUrl ? 'configured' : '',
+          feishuSecret: settings.feishuSecret ? 'configured' : '',
           keywords: settings.keywords,
           scheduledTime: settings.scheduledTime,
           lastScheduledDate: settings.lastScheduledDate
@@ -877,6 +935,7 @@ router.get('/notification/my-settings', async (req, res, next) => {
 router.put('/notification/my-settings', async (req, res, next) => {
   try {
     const parsed = z.object({
+      channel: z.enum(['dingtalk_robot', 'feishu_robot']).default('dingtalk_robot'),
       enabled: z.boolean().default(false),
       scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).default('09:00')
     }).safeParse(req.body);
@@ -897,9 +956,14 @@ router.put('/notification/settings', async (req, res, next) => {
       return;
     }
     const parsed = z.object({
+      channel: z.enum(['dingtalk_robot', 'feishu_robot']).default('dingtalk_robot'),
       enabled: z.boolean().default(false),
       webhookUrl: z.string().default(''),
       secret: z.string().default(''),
+      dingtalkWebhookUrl: z.string().default(''),
+      dingtalkSecret: z.string().default(''),
+      feishuWebhookUrl: z.string().default(''),
+      feishuSecret: z.string().default(''),
       keywords: z.array(z.string()).default([]),
       scheduledTime: z.string().regex(/^\d{2}:\d{2}$/).default('09:00')
     }).safeParse(req.body);
@@ -919,7 +983,14 @@ router.post('/notification/test', async (req, res, next) => {
       res.status(403).json({ message: '只有管理员可以发送测试消息' });
       return;
     }
-    res.json({ result: await sendTestNotification(req.user!) });
+    const parsed = z.object({
+      channel: z.enum(['dingtalk_robot', 'feishu_robot']).optional()
+    }).safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ message: '消息推送平台不正确' });
+      return;
+    }
+    res.json({ result: await sendTestNotification(req.user!, parsed.data.channel) });
   } catch (error) {
     next(error);
   }
@@ -931,7 +1002,14 @@ router.post('/notification/push-dashboard', async (req, res, next) => {
       res.status(403).json({ message: '没有消息推送权限' });
       return;
     }
-    res.json(await pushDashboardNotification(req.user!, 'manual'));
+    const parsed = z.object({
+      channel: z.enum(['dingtalk_robot', 'feishu_robot']).optional()
+    }).safeParse(req.body || {});
+    if (!parsed.success) {
+      res.status(400).json({ message: '消息推送平台不正确' });
+      return;
+    }
+    res.json(await pushDashboardNotification(req.user!, 'manual', parsed.data.channel));
   } catch (error) {
     next(error);
   }
