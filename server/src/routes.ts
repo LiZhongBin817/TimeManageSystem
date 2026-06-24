@@ -53,8 +53,8 @@ import {
 import { getDataSourceClient, moduleDataSourceId } from './dataSources';
 import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontendLoginErrorUrl } from './oauth/oauthClients';
 import { buildDashboardSummary } from './services/dashboardSummary';
-import { isDingTalkSyncRunning, syncDingTalkToLocal } from './services/dingtalkSync';
 import { syncEnterpriseMembersForDingTalk } from './services/enterpriseMemberSync';
+import { isPlatformSyncRunning, syncPlatformsToLocal } from './services/platformSync';
 import {
   getNotificationSettings,
   getNotificationUserSettings,
@@ -468,12 +468,14 @@ router.put('/admin/dingtalk-sync/settings', async (req, res, next) => {
     }
     const parsed = z.object({
       enabled: z.boolean(),
+      dingtalkEnabled: z.boolean().default(true),
+      feishuEnabled: z.boolean().default(false),
       scheduledTime: z.string().regex(/^\d{2}:\d{2}$/),
       startupSyncEnabled: z.boolean(),
       startupDelayMs: z.number().int().min(0).max(3600000)
     }).safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ message: 'Invalid DingTalk sync settings' });
+      res.status(400).json({ message: 'Invalid platform sync settings' });
       return;
     }
     res.json({ settings: await saveDingTalkSyncSettings(parsed.data) });
@@ -567,29 +569,38 @@ router.post('/admin/cache/refresh', async (req, res, next) => {
 router.post('/admin/dingtalk-sync', async (req, res, next) => {
   try {
     if (req.user!.role !== 'admin') {
-      res.status(403).json({ message: 'Only admins can sync DingTalk data' });
+      res.status(403).json({ message: 'Only admins can sync platform data' });
       return;
     }
     const dataSourceId = req.body?.dataSourceId ? Number(req.body.dataSourceId) : undefined;
-    if (isDingTalkSyncRunning()) {
-      res.status(202).json({ accepted: true, running: true, message: '钉钉同步正在执行中，请稍后刷新同步记录' });
+    if (isPlatformSyncRunning()) {
+      res.status(202).json({ accepted: true, running: true, message: '信息同步正在执行中，请稍后刷新同步记录' });
       return;
     }
+    const dataSource = dataSourceId ? await getDataSource(dataSourceId) : undefined;
+    const syncSettings = await getDingTalkSyncSettings();
+    const platforms = dataSource?.platform
+      ? [dataSource.platform]
+      : [
+          syncSettings.dingtalkEnabled ? 'dingtalk' : '',
+          syncSettings.feishuEnabled ? 'feishu' : ''
+        ].filter(Boolean);
     const options = {
       dataSourceId,
-      moduleKey: req.body?.moduleKey ? String(req.body.moduleKey) : undefined
+      moduleKey: req.body?.moduleKey ? String(req.body.moduleKey) : undefined,
+      platforms: platforms as Array<'dingtalk' | 'feishu'>
     };
-    syncDingTalkToLocal(options)
+    syncPlatformsToLocal(options)
       .then(async () => {
-        await syncEnterpriseMembersForDingTalk({ dataSourceId });
+        if (platforms.includes('dingtalk')) await syncEnterpriseMembersForDingTalk({ dataSourceId });
       })
       .catch((error) => {
-        console.error('[dingtalk-sync] manual background sync failed', error);
+        console.error('[platform-sync] manual background sync failed', error);
       });
     res.status(202).json({
       accepted: true,
       running: true,
-      message: '钉钉同步已开始，请稍后刷新同步记录'
+      message: '信息同步已开始，请稍后刷新同步记录'
     });
   } catch (error) {
     next(error);

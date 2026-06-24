@@ -127,6 +127,8 @@ const notificationUserForm = reactive<NotificationUserSettings>({
 });
 const dingTalkSyncForm = reactive<DingTalkSyncSettings>({
   enabled: true,
+  dingtalkEnabled: true,
+  feishuEnabled: false,
   scheduledTime: '02:00',
   startupSyncEnabled: true,
   startupDelayMs: 15000
@@ -219,8 +221,13 @@ function formatShanghaiTime(value: unknown) {
   }).format(date).replace(/\//g, '-');
 }
 
-function syncDirectionText(value: unknown) {
-  return value === 'push' ? '本地到钉钉' : value === 'pull' ? '钉钉到本地' : String(value || '-');
+function platformText(value: unknown) {
+  return value === 'feishu' ? '飞书' : '钉钉';
+}
+
+function syncDirectionText(value: unknown, platform?: unknown) {
+  const target = platformText(platform);
+  return value === 'push' ? `本地到${target}` : value === 'pull' ? `${target}到本地` : String(value || '-');
 }
 
 function syncStatusText(value: unknown) {
@@ -471,10 +478,10 @@ async function syncDingTalkData() {
   dingTalkSyncing.value = true;
   try {
     const result = await syncDingTalkNow();
-    ElMessage.success(result.message || '钉钉同步已开始，请稍后刷新同步记录');
+    ElMessage.success(result.message || '信息同步已开始，请稍后刷新同步记录');
     await refreshUsage();
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.message || '钉钉同步失败');
+    ElMessage.error(error.response?.data?.message || '信息同步失败');
   } finally {
     dingTalkSyncing.value = false;
   }
@@ -1030,18 +1037,24 @@ onMounted(load);
           </section>
           <div class="settings-actions">
             <el-button :icon="Refresh" @click="refreshUsage">刷新统计</el-button>
-            <el-button type="warning" :loading="cacheRefreshing" @click="clearDingTalkCache">清理钉钉缓存</el-button>
-            <el-button type="primary" :loading="dingTalkSyncing" @click="syncDingTalkData">立即同步钉钉</el-button>
+            <el-button type="warning" :loading="cacheRefreshing" @click="clearDingTalkCache">清理表格缓存</el-button>
+            <el-button type="primary" :loading="dingTalkSyncing" @click="syncDingTalkData">立即同步信息</el-button>
           </div>
           <section class="dashboard-section">
             <div class="section-heading">
-              <h2>钉钉定时同步</h2>
-              <span>配置从钉钉定时拉取表格数据，并同步企业成员到本地用户。</span>
+              <h2>信息定时同步</h2>
+              <span>配置从钉钉或飞书定时同步表格数据；企业成员同步当前仍只支持钉钉。</span>
             </div>
             <el-form label-position="top" class="sync-settings-form">
               <div class="sync-settings-grid">
                 <el-form-item label="启用定时同步">
                   <el-switch v-model="dingTalkSyncForm.enabled" />
+                </el-form-item>
+                <el-form-item label="启用钉钉同步">
+                  <el-switch v-model="dingTalkSyncForm.dingtalkEnabled" :disabled="!dingTalkSyncForm.enabled" />
+                </el-form-item>
+                <el-form-item label="启用飞书同步">
+                  <el-switch v-model="dingTalkSyncForm.feishuEnabled" :disabled="!dingTalkSyncForm.enabled" />
                 </el-form-item>
                 <el-form-item label="每日同步时间">
                   <el-time-picker
@@ -1087,27 +1100,30 @@ onMounted(load);
           <section class="dashboard-section">
             <div class="section-heading">
               <h2>本地数据同步</h2>
-              <span>查看本地数据是否已经推送到钉钉。</span>
+              <span>查看本地数据是否已经推送到对应平台表格。</span>
             </div>
             <section class="compact-kpi-grid">
               <article><span>本地行数</span><strong>{{ syncOverview?.rows.total || 0 }}</strong><small>全部模块</small></article>
-              <article><span>已同步</span><strong>{{ syncOverview?.rows.synced || 0 }}</strong><small>已写入钉钉</small></article>
+              <article><span>已同步</span><strong>{{ syncOverview?.rows.synced || 0 }}</strong><small>已写入平台</small></article>
               <article><span>待同步</span><strong>{{ syncOverview?.rows.pending || 0 }}</strong><small>等待推送</small></article>
               <article><span>失败</span><strong>{{ syncOverview?.rows.failed || 0 }}</strong><small>需要重试或检查</small></article>
             </section>
           </section>
           <section class="dashboard-section">
             <div class="section-heading">
-              <h2>钉钉拉取任务</h2>
-              <span>最近从钉钉拉取到本地数据库的定时或手动同步记录。</span>
+              <h2>表格同步任务</h2>
+              <span>最近从钉钉或飞书同步到本地数据库的定时或手动记录。</span>
             </div>
             <el-table :data="syncOverview?.jobs || []" stripe>
               <el-table-column label="开始时间" min-width="190">
                 <template #default="{ row }">{{ formatShanghaiTime(row.started_at) }}</template>
               </el-table-column>
+              <el-table-column label="平台" width="100">
+                <template #default="{ row }">{{ platformText(row.platform) }}</template>
+              </el-table-column>
               <el-table-column prop="module_key" label="模块" min-width="150" />
               <el-table-column label="方向" width="120">
-                <template #default="{ row }">{{ syncDirectionText(row.direction) }}</template>
+                <template #default="{ row }">{{ syncDirectionText(row.direction, row.platform) }}</template>
               </el-table-column>
               <el-table-column label="状态" width="100">
                 <template #default="{ row }">{{ syncStatusText(row.status) }}</template>

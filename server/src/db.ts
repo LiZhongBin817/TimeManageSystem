@@ -127,6 +127,8 @@ export interface ApiUsageSummary {
 
 export interface DingTalkSyncSettings {
   enabled: boolean;
+  dingtalkEnabled: boolean;
+  feishuEnabled: boolean;
   scheduledTime: string;
   startupSyncEnabled: boolean;
   startupDelayMs: number;
@@ -1768,13 +1770,30 @@ export async function saveRuntimeSettings(input: Partial<RuntimeSettings>) {
 }
 
 export async function getDingTalkSyncSettings(): Promise<DingTalkSyncSettings> {
-  const rows = await all<{ key: string; value: string }>("SELECT key, value FROM system_settings WHERE key LIKE 'dingtalk.sync.%'");
+  const rows = await all<{ key: string; value: string }>(
+    "SELECT key, value FROM system_settings WHERE key LIKE 'dingtalk.sync.%' OR key LIKE 'platform.sync.%'"
+  );
   const values = new Map(rows.map((row) => [row.key, row.value]));
+  const legacyEnabled = boolSetting(values.get('dingtalk.sync.enabled'), process.env.DINGTALK_SYNC_ENABLED !== 'false');
   return {
-    enabled: boolSetting(values.get('dingtalk.sync.enabled'), process.env.DINGTALK_SYNC_ENABLED !== 'false'),
-    scheduledTime: normalizeTimeSetting(values.get('dingtalk.sync.scheduledTime'), process.env.DINGTALK_SYNC_TIME || '02:00'),
-    startupSyncEnabled: boolSetting(values.get('dingtalk.sync.startupSyncEnabled'), process.env.DINGTALK_SYNC_STARTUP_ENABLED !== 'false'),
-    startupDelayMs: Number(values.get('dingtalk.sync.startupDelayMs') || process.env.DINGTALK_SYNC_STARTUP_DELAY_MS || 15000)
+    enabled: boolSetting(values.get('platform.sync.enabled'), legacyEnabled),
+    dingtalkEnabled: boolSetting(values.get('platform.sync.dingtalkEnabled'), legacyEnabled),
+    feishuEnabled: boolSetting(values.get('platform.sync.feishuEnabled'), process.env.FEISHU_SYNC_ENABLED === 'true'),
+    scheduledTime: normalizeTimeSetting(
+      values.get('platform.sync.scheduledTime') || values.get('dingtalk.sync.scheduledTime'),
+      process.env.PLATFORM_SYNC_TIME || process.env.DINGTALK_SYNC_TIME || '02:00'
+    ),
+    startupSyncEnabled: boolSetting(
+      values.get('platform.sync.startupSyncEnabled') || values.get('dingtalk.sync.startupSyncEnabled'),
+      process.env.PLATFORM_SYNC_STARTUP_ENABLED !== 'false' && process.env.DINGTALK_SYNC_STARTUP_ENABLED !== 'false'
+    ),
+    startupDelayMs: Number(
+      values.get('platform.sync.startupDelayMs')
+      || values.get('dingtalk.sync.startupDelayMs')
+      || process.env.PLATFORM_SYNC_STARTUP_DELAY_MS
+      || process.env.DINGTALK_SYNC_STARTUP_DELAY_MS
+      || 15000
+    )
   };
 }
 
@@ -1782,12 +1801,20 @@ export async function saveDingTalkSyncSettings(input: Partial<DingTalkSyncSettin
   const current = await getDingTalkSyncSettings();
   const next: DingTalkSyncSettings = {
     enabled: input.enabled ?? current.enabled,
+    dingtalkEnabled: input.dingtalkEnabled ?? current.dingtalkEnabled,
+    feishuEnabled: input.feishuEnabled ?? current.feishuEnabled,
     scheduledTime: normalizeTimeSetting(input.scheduledTime, current.scheduledTime),
     startupSyncEnabled: input.startupSyncEnabled ?? current.startupSyncEnabled,
     startupDelayMs: Math.max(0, Number(input.startupDelayMs ?? current.startupDelayMs) || 0)
   };
   await withPersistenceBatch(() => {
     Object.entries({
+      'platform.sync.enabled': String(next.enabled),
+      'platform.sync.dingtalkEnabled': String(next.dingtalkEnabled),
+      'platform.sync.feishuEnabled': String(next.feishuEnabled),
+      'platform.sync.scheduledTime': next.scheduledTime,
+      'platform.sync.startupSyncEnabled': String(next.startupSyncEnabled),
+      'platform.sync.startupDelayMs': String(next.startupDelayMs),
       'dingtalk.sync.enabled': String(next.enabled),
       'dingtalk.sync.scheduledTime': next.scheduledTime,
       'dingtalk.sync.startupSyncEnabled': String(next.startupSyncEnabled),

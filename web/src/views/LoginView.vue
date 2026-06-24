@@ -231,6 +231,7 @@ onMounted(async () => {
               @focus="focusedField = 'username'"
               @blur="focusedField = null"
               @input="loginError = ''"
+              @keyup.enter="submitLocalLogin"
             />
           </el-form-item>
           <el-form-item>
@@ -243,6 +244,7 @@ onMounted(async () => {
               @focus="focusedField = 'password'"
               @blur="focusedField = null"
               @input="loginError = ''"
+              @keyup.enter="submitLocalLogin"
             >
               <template #suffix>
                 <el-button
@@ -264,7 +266,7 @@ onMounted(async () => {
 
         <div v-if="loginError" class="login-error" role="alert">{{ loginError }}</div>
 
-        <el-button class="full-button" size="large" type="primary" :loading="loading || loadingSources" @click="submitLogin">
+        <el-button class="full-button" size="large" type="primary" native-type="submit" :loading="loading || loadingSources" @click="submitLogin">
           {{ loginMode === 'local' ? '账号密码登录' : currentProviderLabel }}
         </el-button>
       </el-form>

@@ -6,12 +6,20 @@ import http from 'http';
 import https from 'https';
 import { ModuleConfig } from '../config/configStore';
 import { SheetRow } from '../data/mockRows';
+import {
+  deleteLocalModuleRow,
+  invalidateSheetCache,
+  listPendingLocalModuleRows,
+  markLocalModuleRowSync,
+  replaceLocalModuleRows
+} from '../db';
 
 interface FeishuConfig {
   appId?: string;
   appSecret?: string;
   spreadsheetToken?: string;
   baseUrl?: string;
+  dataSourceId?: number;
 }
 
 interface EnterpriseMember {
@@ -184,6 +192,51 @@ export class FeishuSheetClient {
     return response.data?.data;
   }
 
+  async syncModuleFromRemote(module: ModuleConfig): Promise<{ rows: number }> {
+    if (!this.isConfigured) return { rows: 0 };
+    const rows = await this.getRows(module);
+    const dataSourceId = this.dataSourceId();
+    if (dataSourceId) {
+      await replaceLocalModuleRows({
+        platform: 'feishu',
+        dataSourceId,
+        moduleKey: module.key,
+        rows
+      });
+      await invalidateSheetCache({ platform: 'feishu', dataSourceId, moduleKey: module.key });
+    }
+    return { rows: rows.length };
+  }
+
+  async syncPendingLocalChanges(module: ModuleConfig): Promise<{ total: number; success: number; failed: number }> {
+    const dataSourceId = this.dataSourceId();
+    if (!this.isConfigured || !dataSourceId) return { total: 0, success: 0, failed: 0 };
+    const rows = await listPendingLocalModuleRows(dataSourceId, module.key);
+    let success = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      try {
+        if (row.syncAction === 'delete') {
+          await this.writeRow(module, Number(row.rowNumber) || module.dataStartRow, row as SheetRow);
+          deleteLocalModuleRow(dataSourceId, module.key, String(row.id || row.rowNumber));
+        } else if (String(row.id || '').startsWith('local-')) {
+          await this.createRow(module, row);
+          this.markRowSynced(module, row as SheetRow);
+        } else {
+          await this.updateRow(module, String(row.id || row.rowNumber), row);
+          this.markRowSynced(module, row as SheetRow);
+        }
+        success += 1;
+      } catch (error) {
+        failed += 1;
+        this.markRowFailed(module, row as SheetRow, error);
+      }
+    }
+
+    return { total: rows.length, success, failed };
+  }
+
   /** 缓存 tenant access token 到临近过期前，减少认证请求次数。 */
   private async getAccessToken() {
     if (this.token && this.token.expiresAt > Date.now() + 60000) return this.token.value;
@@ -246,5 +299,34 @@ export class FeishuSheetClient {
       { valueRange: { range, values } },
       { headers: { Authorization: `Bearer ${token}` } }
     );
+  }
+
+  private dataSourceId() {
+    const value = Number(this.config.dataSourceId || 0);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }
+
+  private markRowSynced(module: ModuleConfig, row: SheetRow) {
+    const dataSourceId = this.dataSourceId();
+    if (!dataSourceId) return;
+    markLocalModuleRowSync({
+      dataSourceId,
+      moduleKey: module.key,
+      rowId: String(row.id || row.rowNumber),
+      status: 'synced'
+    });
+  }
+
+  private markRowFailed(module: ModuleConfig, row: SheetRow, error: unknown) {
+    const dataSourceId = this.dataSourceId();
+    if (!dataSourceId) return;
+    const detail = error as { message?: string };
+    markLocalModuleRowSync({
+      dataSourceId,
+      moduleKey: module.key,
+      rowId: String(row.id || row.rowNumber),
+      status: 'failed',
+      error: detail?.message || String(error || 'sync failed')
+    });
   }
 }

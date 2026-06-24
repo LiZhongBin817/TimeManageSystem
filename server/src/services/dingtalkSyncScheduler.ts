@@ -1,15 +1,15 @@
 /**
- * 后台调度器：在启动时和配置的每日时间触发钉钉同步。
+ * 后台调度器：在启动时和配置的每日时间触发多平台表格同步。
  */
 import { getDingTalkSyncSettings } from '../db';
-import { syncDingTalkToLocal } from './dingtalkSync';
 import { syncEnterpriseMembersForDingTalk } from './enterpriseMemberSync';
+import { syncPlatformsToLocal } from './platformSync';
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 let lastSyncDate = '';
 let lastScheduledAttemptAt = 0;
-const SCHEDULED_RETRY_INTERVAL_MS = Number(process.env.DINGTALK_SYNC_RETRY_INTERVAL_MS || 10 * 60 * 1000);
+const SCHEDULED_RETRY_INTERVAL_MS = Number(process.env.PLATFORM_SYNC_RETRY_INTERVAL_MS || process.env.DINGTALK_SYNC_RETRY_INTERVAL_MS || 10 * 60 * 1000);
 
 function todayInShanghai() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -32,16 +32,28 @@ async function runSync(reason: string) {
   if (running) return false;
   running = true;
   try {
-    console.log(`[dingtalk-sync] starting ${reason}`);
-    const sheetResult = await syncDingTalkToLocal();
-    const memberResult = await syncEnterpriseMembersForDingTalk();
+    const settings = await getDingTalkSyncSettings();
+    const platforms = [
+      settings.dingtalkEnabled ? 'dingtalk' : '',
+      settings.feishuEnabled ? 'feishu' : ''
+    ].filter(Boolean) as Array<'dingtalk' | 'feishu'>;
+    if (!platforms.length) {
+      console.log(`[platform-sync] skipped ${reason}: no platform enabled`);
+      return true;
+    }
+
+    console.log(`[platform-sync] starting ${reason}: platforms=${platforms.join(',')}`);
+    const sheetResult = await syncPlatformsToLocal({ platforms });
+    const memberResult = settings.dingtalkEnabled
+      ? await syncEnterpriseMembersForDingTalk()
+      : { success: 0, failed: 0, totalMembers: 0 };
     console.log(
-      `[dingtalk-sync] finished ${reason}: sheets success=${sheetResult.success}, failed=${sheetResult.failed}; ` +
+      `[platform-sync] finished ${reason}: sheets success=${sheetResult.success}, failed=${sheetResult.failed}; ` +
       `members success=${memberResult.success}, failed=${memberResult.failed}, total=${memberResult.totalMembers}`
     );
     return sheetResult.failed === 0 && memberResult.failed === 0;
   } catch (error) {
-    console.error('[dingtalk-sync] failed', error);
+    console.error('[platform-sync] failed', error);
     return false;
   } finally {
     running = false;
@@ -66,7 +78,7 @@ async function tick() {
 
 export function startDingTalkSyncScheduler() {
   if (timer) return;
-  console.log('[dingtalk-sync] scheduler started');
+  console.log('[platform-sync] scheduler started');
   timer = setInterval(tick, 60 * 1000);
   getDingTalkSyncSettings()
     .then((settings) => {
@@ -79,5 +91,5 @@ export function startDingTalkSyncScheduler() {
         }, settings.startupDelayMs);
       }
     })
-    .catch((error) => console.error('[dingtalk-sync] failed to load startup settings', error));
+    .catch((error) => console.error('[platform-sync] failed to load startup settings', error));
 }

@@ -214,6 +214,8 @@ export interface SyncOverview {
 
 export interface DingTalkSyncSettings {
   enabled: boolean;
+  dingtalkEnabled: boolean;
+  feishuEnabled: boolean;
   scheduledTime: string;
   startupSyncEnabled: boolean;
   startupDelayMs: number;
