@@ -12,6 +12,8 @@ import { buildDashboardSummary, ScheduleItem } from './dashboardSummary';
 export interface NotificationSettings {
   channel: 'dingtalk_robot' | 'feishu_robot';
   enabled: boolean;
+  dingtalkEnabled: boolean;
+  feishuEnabled: boolean;
   webhookUrl: string;
   secret: string;
   dingtalkWebhookUrl: string;
@@ -32,6 +34,8 @@ export interface NotificationUserSettings {
 interface NotificationSettingsRow {
   channel?: string;
   enabled: number;
+  dingtalk_enabled?: number | null;
+  feishu_enabled?: number | null;
   webhook_url?: string;
   secret?: string;
   feishu_webhook_url?: string;
@@ -57,9 +61,15 @@ function firstEnvValue(...keys: string[]) {
 }
 
 function envNotificationDefaults() {
+  const channel = (firstEnvValue('NOTIFICATION_CHANNEL') || 'dingtalk_robot') as NotificationSettings['channel'];
+  const legacyEnabled = firstEnvValue('NOTIFICATION_ENABLED') === 'true';
+  const dingtalkEnabled = firstEnvValue('DINGTALK_ROBOT_ENABLED') === 'true';
+  const feishuEnabled = firstEnvValue('FEISHU_ROBOT_ENABLED') === 'true';
   return {
-    channel: (firstEnvValue('NOTIFICATION_CHANNEL') || 'dingtalk_robot') as NotificationSettings['channel'],
-    enabled: firstEnvValue('NOTIFICATION_ENABLED', 'DINGTALK_ROBOT_ENABLED') === 'true',
+    channel,
+    enabled: legacyEnabled || dingtalkEnabled || feishuEnabled,
+    dingtalkEnabled: dingtalkEnabled || (legacyEnabled && channel === 'dingtalk_robot'),
+    feishuEnabled: feishuEnabled || (legacyEnabled && channel === 'feishu_robot'),
     dingtalkWebhookUrl: firstEnvValue('DINGTALK_ROBOT_WEBHOOK_URL', 'NOTIFICATION_WEBHOOK_URL'),
     dingtalkSecret: firstEnvValue('DINGTALK_ROBOT_SECRET', 'NOTIFICATION_SECRET'),
     feishuWebhookUrl: firstEnvValue('FEISHU_ROBOT_WEBHOOK_URL'),
@@ -112,10 +122,18 @@ function normalizeSettings(row?: NotificationSettingsRow): NotificationSettings 
   const feishuSecret = row?.feishu_secret || envDefaults.feishuSecret;
   const webhookUrl = channel === 'feishu_robot' ? feishuWebhookUrl : dingtalkWebhookUrl;
   const secret = channel === 'feishu_robot' ? feishuSecret : dingtalkSecret;
+  const dingtalkEnabled = row?.dingtalk_enabled === null || row?.dingtalk_enabled === undefined
+    ? channel === 'dingtalk_robot' || envDefaults.dingtalkEnabled
+    : Boolean(row.dingtalk_enabled);
+  const feishuEnabled = row?.feishu_enabled === null || row?.feishu_enabled === undefined
+    ? channel === 'feishu_robot' || envDefaults.feishuEnabled
+    : Boolean(row.feishu_enabled);
 
   return {
     channel,
     enabled: Boolean(row?.enabled) || envDefaults.enabled,
+    dingtalkEnabled,
+    feishuEnabled,
     webhookUrl,
     secret,
     dingtalkWebhookUrl,
@@ -167,18 +185,20 @@ export async function saveNotificationUserSettings(userId: number, input: Notifi
 
 export async function saveNotificationSettings(input: NotificationSettings) {
   const existing = await getNotificationSettings();
-  const channel = input.channel === 'feishu_robot' ? 'feishu_robot' : 'dingtalk_robot';
+  const channel = input.feishuEnabled && !input.dingtalkEnabled ? 'feishu_robot' : 'dingtalk_robot';
   const dingtalkWebhookUrl = String(input.dingtalkWebhookUrl || '').trim() || existing.dingtalkWebhookUrl;
   const dingtalkSecret = String(input.dingtalkSecret || '').trim() || existing.dingtalkSecret;
   const feishuWebhookUrl = String(input.feishuWebhookUrl || '').trim() || existing.feishuWebhookUrl;
   const feishuSecret = String(input.feishuSecret || '').trim() || existing.feishuSecret;
 
   run(
-    `INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, feishu_webhook_url, feishu_secret, keyword_json, scheduled_time, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO notification_settings (id, channel, enabled, dingtalk_enabled, feishu_enabled, webhook_url, secret, feishu_webhook_url, feishu_secret, keyword_json, scheduled_time, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(id) DO UPDATE SET
        channel = excluded.channel,
        enabled = excluded.enabled,
+       dingtalk_enabled = excluded.dingtalk_enabled,
+       feishu_enabled = excluded.feishu_enabled,
        webhook_url = excluded.webhook_url,
        secret = excluded.secret,
        feishu_webhook_url = excluded.feishu_webhook_url,
@@ -187,6 +207,8 @@ export async function saveNotificationSettings(input: NotificationSettings) {
        scheduled_time = excluded.scheduled_time,
        last_scheduled_date = CASE
          WHEN notification_settings.enabled <> excluded.enabled
+           OR notification_settings.dingtalk_enabled <> excluded.dingtalk_enabled
+           OR notification_settings.feishu_enabled <> excluded.feishu_enabled
            OR notification_settings.scheduled_time <> excluded.scheduled_time
          THEN NULL
          ELSE notification_settings.last_scheduled_date
@@ -195,6 +217,8 @@ export async function saveNotificationSettings(input: NotificationSettings) {
     [
       channel,
       input.enabled ? 1 : 0,
+      input.dingtalkEnabled ? 1 : 0,
+      input.feishuEnabled ? 1 : 0,
       dingtalkWebhookUrl,
       dingtalkSecret,
       feishuWebhookUrl,
@@ -414,6 +438,30 @@ async function sendRobotMarkdown(settings: NotificationSettings, title: string, 
   return sendDingTalkMarkdown(settings, title, markdown);
 }
 
+export function notificationChannelForUser(user: Pick<AuthUser, 'platform'>): NotificationSettings['channel'] {
+  return user.platform === 'feishu' ? 'feishu_robot' : 'dingtalk_robot';
+}
+
+function isChannelEnabled(settings: NotificationSettings, channel: NotificationSettings['channel']) {
+  return channel === 'feishu_robot' ? settings.feishuEnabled : settings.dingtalkEnabled;
+}
+
+function enabledNotificationChannels(settings: NotificationSettings, channel?: NotificationSettings['channel']) {
+  if (channel) return isChannelEnabled(settings, channel) ? [channel] : [];
+  return [
+    settings.dingtalkEnabled ? 'dingtalk_robot' : '',
+    settings.feishuEnabled ? 'feishu_robot' : ''
+  ].filter(Boolean) as NotificationSettings['channel'][];
+}
+
+function channelLabel(channel: NotificationSettings['channel']) {
+  return channel === 'feishu_robot' ? '飞书' : '钉钉';
+}
+
+function noEnabledChannelMessage(channel?: NotificationSettings['channel']) {
+  return channel ? `请先启用${channelLabel(channel)}机器人推送` : '请先启用至少一个消息机器人';
+}
+
 function withNotificationChannel(settings: NotificationSettings, channel?: NotificationSettings['channel']): NotificationSettings {
   if (!channel || channel === settings.channel) return settings;
   return {
@@ -437,38 +485,58 @@ function logNotification(settings: NotificationSettings, action: string, status:
 }
 
 export async function sendTestNotification(user?: AuthUser, channel?: NotificationSettings['channel']) {
-  const settings = withNotificationChannel(await getNotificationSettings(), channel);
-  try {
-    const result = await sendRobotMarkdown(settings, '任务管理系统测试消息', `## 任务管理系统测试消息\n${settings.channel === 'feishu_robot' ? '飞书' : '钉钉'}机器人配置成功。`);
-    logNotification(settings, 'test', 'success', '测试消息发送成功', result, user);
-    return result;
-  } catch (error: any) {
-    logNotification(settings, 'test', 'failed', error.message || '测试消息发送失败', undefined, user);
-    throw error;
+  const baseSettings = await getNotificationSettings();
+  const channels = enabledNotificationChannels(baseSettings, channel);
+  if (!channels.length) throw new Error(noEnabledChannelMessage(channel));
+  const results = [];
+  for (const item of channels) {
+    const settings = withNotificationChannel(baseSettings, item);
+    try {
+      const result = await sendRobotMarkdown(settings, '任务管理系统测试消息', `## 任务管理系统测试消息\n${settings.channel === 'feishu_robot' ? '飞书' : '钉钉'}机器人配置成功。`);
+      logNotification(settings, 'test', 'success', '测试消息发送成功', result, user);
+      results.push({ channel: settings.channel, status: 'success', result });
+    } catch (error: any) {
+      const message = error.message || '测试消息发送失败';
+      logNotification(settings, 'test', 'failed', message, undefined, user);
+      results.push({ channel: settings.channel, status: 'failed', message });
+    }
   }
+  if (results.every((item) => item.status === 'failed')) {
+    throw new Error(results.map((item) => `${item.channel}: ${item.message || '发送失败'}`).join('；'));
+  }
+  return { results };
 }
 
 export async function pushDashboardNotification(user: AuthUser, action = 'manual', channel?: NotificationSettings['channel']) {
-  const settings = withNotificationChannel(await getNotificationSettings(), channel);
-  try {
-    const summary = await buildDashboardSummary(user);
-    const message = buildDashboardMarkdown(summary);
-    const result = await sendRobotMarkdown(settings, message.title, message.text);
-    logNotification(settings, action, 'success', '汇总消息发送成功', {
-      developing: summary.inProgress.developing,
-      testing: summary.inProgress.testing
-    }, user);
-    return {
-      result,
-      summary: {
-        developing: summary.inProgress.developing,
-        testing: summary.inProgress.testing
-      }
-    };
-  } catch (error: any) {
-    logNotification(settings, action, 'failed', error.message || '汇总消息发送失败', undefined, user);
-    throw error;
+  const baseSettings = await getNotificationSettings();
+  const channels = enabledNotificationChannels(baseSettings, channel);
+  if (!channels.length) throw new Error(noEnabledChannelMessage(channel));
+  const summary = await buildDashboardSummary(user);
+  const message = buildDashboardMarkdown(summary);
+  const payload = {
+    developing: summary.inProgress.developing,
+    testing: summary.inProgress.testing
+  };
+  const results = [];
+  for (const item of channels) {
+    const settings = withNotificationChannel(baseSettings, item);
+    try {
+      const result = await sendRobotMarkdown(settings, message.title, message.text);
+      logNotification(settings, action, 'success', '汇总消息发送成功', payload, user);
+      results.push({ channel: settings.channel, status: 'success', result });
+    } catch (error: any) {
+      const errorMessage = error.message || '汇总消息发送失败';
+      logNotification(settings, action, 'failed', errorMessage, undefined, user);
+      results.push({ channel: settings.channel, status: 'failed', message: errorMessage });
+    }
   }
+  if (results.every((item) => item.status === 'failed')) {
+    throw new Error(results.map((item) => `${item.channel}: ${item.message || '发送失败'}`).join('；'));
+  }
+  return {
+    results,
+    summary: payload
+  };
 }
 
 export async function markScheduledSent(date: string) {

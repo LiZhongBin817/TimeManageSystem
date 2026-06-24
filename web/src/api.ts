@@ -11,6 +11,7 @@ import type {
   ModuleField,
   ModulePermission,
   NotificationLog,
+  NotificationSendResult,
   NotificationSettings,
   NotificationUserSettings,
   PermissionSubjectType,
@@ -345,12 +346,15 @@ export async function saveNotificationUserSettings(settings: NotificationUserSet
 }
 
 export async function sendNotificationTest(channel?: 'dingtalk_robot' | 'feishu_robot') {
-  const { data } = await api.post('/notification/test', { channel });
+  const { data } = await api.post<{ result: { results: NotificationSendResult[] } }>('/notification/test', { channel });
   return data;
 }
 
 export async function pushDashboardNotification(channel?: 'dingtalk_robot' | 'feishu_robot') {
-  const { data } = await api.post<{ summary: { developing: number; testing: number } }>('/notification/push-dashboard', { channel });
+  const { data } = await api.post<{
+    results: NotificationSendResult[];
+    summary: { developing: number; testing: number };
+  }>('/notification/push-dashboard', { channel });
   return data;
 }
 

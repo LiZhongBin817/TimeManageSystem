@@ -4,7 +4,7 @@
 import { AuthUser } from '../auth';
 import { all, get } from '../db';
 import { getDataSource } from '../config/modules';
-import { getNotificationSettings, markScheduledSent, markUserScheduledSent, pushDashboardNotification } from './notification';
+import { getNotificationSettings, markScheduledSent, markUserScheduledSent, notificationChannelForUser, pushDashboardNotification } from './notification';
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
@@ -48,6 +48,13 @@ function timeInShanghai() {
 
 function hasReachedTime(currentTime: string, scheduledTime = '09:00') {
   return currentTime >= scheduledTime;
+}
+
+function hasEnabledWebhook(settings: Awaited<ReturnType<typeof getNotificationSettings>>) {
+  return Boolean(
+    (settings.dingtalkEnabled && settings.dingtalkWebhookUrl)
+    || (settings.feishuEnabled && settings.feishuWebhookUrl)
+  );
 }
 
 function retryKey(scope: 'global' | 'user', id = 'default') {
@@ -139,7 +146,7 @@ async function tick() {
     const settings = await getNotificationSettings();
     const today = todayInShanghai();
     const currentTime = timeInShanghai();
-    if (!settings.webhookUrl) return;
+    if (!hasEnabledWebhook(settings)) return;
 
     if (settings.enabled && settings.lastScheduledDate !== today && hasReachedTime(currentTime, settings.scheduledTime || '09:00')) {
       const user = await buildSchedulerUser();
@@ -177,7 +184,7 @@ async function tick() {
       if (!canRetry(key, today)) continue;
       try {
         console.log(`[notification-scheduler] pushing personal dashboard summary for user ${user.id} at ${currentTime}`);
-        await pushDashboardNotification(user, `scheduled:user:${user.id}`);
+        await pushDashboardNotification(user, `scheduled:user:${user.id}`, notificationChannelForUser(user));
         await markUserScheduledSent(user.id, today);
         clearRetry(key);
       } catch (error) {

@@ -435,6 +435,8 @@ export async function initDatabase() {
   await ensureColumn('notification_settings', 'keyword_json', 'TEXT');
   await ensureColumn('notification_settings', 'feishu_webhook_url', 'TEXT');
   await ensureColumn('notification_settings', 'feishu_secret', 'TEXT');
+  await ensureColumn('notification_settings', 'dingtalk_enabled', 'INTEGER');
+  await ensureColumn('notification_settings', 'feishu_enabled', 'INTEGER');
 
   run(`
     CREATE TABLE IF NOT EXISTS notification_logs (
@@ -551,14 +553,30 @@ export async function initDatabase() {
 
   const notificationCount = await get<{ total: number }>('SELECT COUNT(*) as total FROM notification_settings');
   if (!notificationCount?.total) {
-    run('INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time) VALUES (1, ?, ?, ?, ?, ?, ?)', [
+    run('INSERT INTO notification_settings (id, channel, enabled, webhook_url, secret, keyword_json, scheduled_time, dingtalk_enabled, feishu_enabled) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)', [
       'dingtalk_robot',
       0,
       '',
       '',
       JSON.stringify(['项目提醒']),
-      '09:00'
+      '09:00',
+      1,
+      0
     ]);
+  } else {
+    run(`
+      UPDATE notification_settings
+      SET
+        dingtalk_enabled = CASE
+          WHEN dingtalk_enabled IS NULL THEN CASE WHEN channel = 'dingtalk_robot' THEN 1 ELSE 0 END
+          ELSE dingtalk_enabled
+        END,
+        feishu_enabled = CASE
+          WHEN feishu_enabled IS NULL THEN CASE WHEN channel = 'feishu_robot' THEN 1 ELSE 0 END
+          ELSE feishu_enabled
+        END
+      WHERE id = 1
+    `);
   }
 
   const count = await get<{ total: number }>('SELECT COUNT(*) as total FROM users');

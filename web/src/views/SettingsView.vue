@@ -108,6 +108,8 @@ const userForm = reactive<UserFormState>(emptyUserForm());
 const notificationForm = reactive<NotificationSettings>({
   channel: 'dingtalk_robot',
   enabled: false,
+  dingtalkEnabled: true,
+  feishuEnabled: false,
   webhookUrl: '',
   secret: '',
   dingtalkWebhookUrl: '',
@@ -185,6 +187,10 @@ const referenceModuleOptions = computed(() => {
 });
 const isAdmin = computed(() => me.value?.role === 'admin');
 const canUseNotification = computed(() => Boolean(me.value));
+const personalNotificationChannel = computed(() => me.value?.platform === 'feishu' ? 'feishu_robot' : 'dingtalk_robot');
+const personalNotificationPlatformText = computed(() => notificationChannelText(personalNotificationChannel.value));
+const canShowDingTalkNotification = computed(() => isAdmin.value || me.value?.platform === 'dingtalk');
+const canShowFeishuNotification = computed(() => isAdmin.value || me.value?.platform === 'feishu');
 const userDialogTitle = computed(() => userDialogMode.value === 'create' ? '新增用户' : '用户管理');
 const roleOptions: Array<{ label: string; value: Role }> = [
   { label: '管理员', value: 'admin' },
@@ -195,35 +201,6 @@ const permissionSubjectOptions = computed(() => {
   if (permissionSubjectType.value === 'role') return roleOptions;
   return users.value.map((user) => ({ label: `${user.displayName}（${user.role}）`, value: String(user.id) }));
 });
-const notificationWebhookModel = computed({
-  get() {
-    return notificationForm.channel === 'feishu_robot'
-      ? notificationForm.feishuWebhookUrl
-      : notificationForm.dingtalkWebhookUrl;
-  },
-  set(value: string) {
-    if (notificationForm.channel === 'feishu_robot') {
-      notificationForm.feishuWebhookUrl = value;
-      return;
-    }
-    notificationForm.dingtalkWebhookUrl = value;
-  }
-});
-const notificationSecretModel = computed({
-  get() {
-    return notificationForm.channel === 'feishu_robot'
-      ? notificationForm.feishuSecret
-      : notificationForm.dingtalkSecret;
-  },
-  set(value: string) {
-    if (notificationForm.channel === 'feishu_robot') {
-      notificationForm.feishuSecret = value;
-      return;
-    }
-    notificationForm.dingtalkSecret = value;
-  }
-});
-
 function formatShanghaiTime(value: unknown) {
   const text = String(value || '').trim();
   if (!text) return '-';
@@ -253,6 +230,23 @@ function syncStatusText(value: unknown) {
   if (text === 'running') return '运行中';
   if (text === 'skipped') return '已跳过';
   return text || '-';
+}
+
+function notificationChannelText(channel: string) {
+  return channel === 'feishu_robot' ? '飞书' : '钉钉';
+}
+
+function notificationResultText(results: Array<{ channel: string; status: string; message?: string }> = []) {
+  const successChannels = results
+    .filter((item) => item.status === 'success')
+    .map((item) => notificationChannelText(item.channel));
+  const failedChannels = results
+    .filter((item) => item.status === 'failed')
+    .map((item) => `${notificationChannelText(item.channel)}失败${item.message ? `：${item.message}` : ''}`);
+  return [
+    successChannels.length ? `成功：${successChannels.join('、')}` : '',
+    failedChannels.length ? failedChannels.join('；') : ''
+  ].filter(Boolean).join('；');
 }
 
 function loginMethodText(row: ManagedUser) {
@@ -491,6 +485,8 @@ async function loadNotificationConfig() {
     const settings = await getNotificationSettings();
     const userSettings = await getNotificationUserSettings();
     Object.assign(notificationForm, settings);
+    notificationForm.dingtalkEnabled = Boolean(settings.dingtalkEnabled ?? settings.channel === 'dingtalk_robot');
+    notificationForm.feishuEnabled = Boolean(settings.feishuEnabled ?? settings.channel === 'feishu_robot');
     Object.assign(notificationUserForm, userSettings);
     if (!notificationForm.keywords?.length) notificationForm.keywords = ['项目提醒'];
     notificationLogs.value = await getNotificationLogs();
@@ -514,8 +510,13 @@ async function submitNotificationUserSettings() {
 async function submitNotification() {
   notificationSaving.value = true;
   try {
-    notificationForm.webhookUrl = notificationWebhookModel.value.trim();
-    notificationForm.secret = notificationSecretModel.value.trim();
+    notificationForm.channel = notificationForm.feishuEnabled && !notificationForm.dingtalkEnabled ? 'feishu_robot' : 'dingtalk_robot';
+    notificationForm.webhookUrl = notificationForm.channel === 'feishu_robot'
+      ? notificationForm.feishuWebhookUrl.trim()
+      : notificationForm.dingtalkWebhookUrl.trim();
+    notificationForm.secret = notificationForm.channel === 'feishu_robot'
+      ? notificationForm.feishuSecret.trim()
+      : notificationForm.dingtalkSecret.trim();
     notificationForm.dingtalkWebhookUrl = notificationForm.dingtalkWebhookUrl.trim();
     notificationForm.dingtalkSecret = notificationForm.dingtalkSecret.trim();
     notificationForm.feishuWebhookUrl = notificationForm.feishuWebhookUrl.trim();
@@ -543,8 +544,8 @@ function removeNotificationKeyword(index: number) {
 async function testNotification() {
   notificationTesting.value = true;
   try {
-    await sendNotificationTest(notificationForm.channel);
-    ElMessage.success('测试消息已发送');
+    const result = await sendNotificationTest();
+    ElMessage.success(notificationResultText(result.result.results) || '测试消息已发送');
     await loadNotificationConfig();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '测试消息发送失败');
@@ -556,9 +557,9 @@ async function testNotification() {
 async function pushNotificationNow() {
   notificationPushing.value = true;
   try {
-    const result = await pushDashboardNotification(notificationForm.channel);
-    const channelText = notificationForm.channel === 'feishu_robot' ? '飞书' : '钉钉';
-    ElMessage.success(`已推送到${channelText}：开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
+    const result = await pushDashboardNotification();
+    const platformText = notificationResultText(result.results) || '推送完成';
+    ElMessage.success(`${platformText}；开发中 ${result.summary.developing}，测试中 ${result.summary.testing}`);
     await loadNotificationConfig();
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '推送失败');
@@ -1164,15 +1165,9 @@ onMounted(load);
           <div class="notification-settings">
             <div class="subsection-title">机器人配置</div>
             <el-form label-position="top">
-              <div class="form-grid">
+              <div class="notification-schedule-grid">
                 <el-form-item label="启用定时推送">
                   <el-switch v-model="notificationForm.enabled" :disabled="!isAdmin" />
-                </el-form-item>
-                <el-form-item label="机器人平台">
-                  <el-select v-model="notificationForm.channel" class="full-field" :disabled="!isAdmin">
-                    <el-option label="钉钉机器人" value="dingtalk_robot" />
-                    <el-option label="飞书机器人" value="feishu_robot" />
-                  </el-select>
                 </el-form-item>
                 <el-form-item label="每日推送时间">
                   <el-time-picker
@@ -1183,24 +1178,58 @@ onMounted(load);
                     :disabled="!isAdmin"
                   />
                 </el-form-item>
-                <el-form-item :label="notificationForm.channel === 'feishu_robot' ? '飞书机器人 Webhook' : '钉钉机器人 Webhook'">
-                  <el-input
-                    v-model="notificationWebhookModel"
-                    :disabled="!isAdmin"
-                    :placeholder="notificationForm.channel === 'feishu_robot'
-                      ? 'https://open.feishu.cn/open-apis/bot/v2/hook/...'
-                      : 'https://oapi.dingtalk.com/robot/send?access_token=...'"
-                  />
-                </el-form-item>
-                <el-form-item label="加签 Secret">
-                  <el-input
-                    v-model="notificationSecretModel"
-                    :disabled="!isAdmin"
-                    show-password
-                    :placeholder="notificationForm.channel === 'feishu_robot' ? '飞书机器人开启签名校验时填写' : 'SEC...'"
-                  />
-                </el-form-item>
-                <el-form-item label="自定义关键词" class="notification-keyword-form">
+              </div>
+              <div class="notification-channel-grid">
+                <section v-if="canShowDingTalkNotification" class="notification-channel-panel">
+                  <div class="notification-channel-header">
+                    <div>
+                      <strong>钉钉机器人</strong>
+                      <span>发送到钉钉群自定义机器人</span>
+                    </div>
+                    <el-switch v-model="notificationForm.dingtalkEnabled" :disabled="!isAdmin" />
+                  </div>
+                  <el-form-item label="Webhook">
+                    <el-input
+                      v-model="notificationForm.dingtalkWebhookUrl"
+                      :disabled="!isAdmin"
+                      placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                    />
+                  </el-form-item>
+                  <el-form-item label="加签 Secret">
+                    <el-input
+                      v-model="notificationForm.dingtalkSecret"
+                      :disabled="!isAdmin"
+                      show-password
+                      placeholder="SEC..."
+                    />
+                  </el-form-item>
+                </section>
+                <section v-if="canShowFeishuNotification" class="notification-channel-panel">
+                  <div class="notification-channel-header">
+                    <div>
+                      <strong>飞书机器人</strong>
+                      <span>发送到飞书群自定义机器人</span>
+                    </div>
+                    <el-switch v-model="notificationForm.feishuEnabled" :disabled="!isAdmin" />
+                  </div>
+                  <el-form-item label="Webhook">
+                    <el-input
+                      v-model="notificationForm.feishuWebhookUrl"
+                      :disabled="!isAdmin"
+                      placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                    />
+                  </el-form-item>
+                  <el-form-item label="加签 Secret">
+                    <el-input
+                      v-model="notificationForm.feishuSecret"
+                      :disabled="!isAdmin"
+                      show-password
+                      placeholder="飞书机器人开启签名校验时填写"
+                    />
+                  </el-form-item>
+                </section>
+              </div>
+              <el-form-item label="自定义关键词" class="notification-keyword-form">
                   <div class="keyword-list">
                     <div v-for="(_keyword, index) in notificationForm.keywords" :key="index" class="keyword-row">
                       <el-input v-model="notificationForm.keywords[index]" :disabled="!isAdmin" placeholder="例如：项目提醒" />
@@ -1208,8 +1237,7 @@ onMounted(load);
                     </div>
                     <el-button v-if="isAdmin" size="small" :icon="Plus" @click="addNotificationKeyword">新增关键词</el-button>
                   </div>
-                </el-form-item>
-              </div>
+              </el-form-item>
             </el-form>
             <el-alert
               v-if="!isAdmin"
@@ -1218,6 +1246,12 @@ onMounted(load);
               title="消息机器人 Webhook 和加签密钥由管理员统一维护，你可以配置个人定时推送并立即推送自己的任务汇总。"
             />
             <div class="subsection-title">个人定时推送</div>
+            <el-alert
+              class="notification-platform-alert"
+              type="info"
+              :closable="false"
+              :title="`个人推送平台：${personalNotificationPlatformText}机器人。个人立即推送和个人定时推送只会发送到当前登录平台。`"
+            />
             <el-form label-position="top">
               <div class="form-grid">
                 <el-form-item label="启用个人定时推送">
@@ -1237,7 +1271,7 @@ onMounted(load);
               <el-button v-if="isAdmin" type="primary" :loading="notificationSaving" @click="submitNotification">保存配置</el-button>
               <el-button type="primary" plain :loading="notificationUserSaving" @click="submitNotificationUserSettings">保存个人定时</el-button>
               <el-button v-if="isAdmin" :loading="notificationTesting" @click="testNotification">发送测试消息</el-button>
-              <el-button type="success" :icon="Bell" :loading="notificationPushing" @click="pushNotificationNow">立即推送汇总</el-button>
+              <el-button type="success" :icon="Bell" :loading="notificationPushing" @click="pushNotificationNow">立即推送到{{ personalNotificationPlatformText }}</el-button>
               <el-button :icon="Refresh" @click="refreshNotificationLogs">刷新推送记录</el-button>
             </div>
             <el-alert
@@ -1253,6 +1287,11 @@ onMounted(load);
                 </template>
               </el-table-column>
               <el-table-column prop="actionText" label="类型" width="130" />
+              <el-table-column label="平台" width="100">
+                <template #default="{ row }">
+                  {{ notificationChannelText(row.channel) }}
+                </template>
+              </el-table-column>
               <el-table-column prop="status" label="状态" width="100">
                 <template #default="{ row }">
                   <el-tag :type="row.status === 'success' ? 'success' : 'danger'">{{ row.status }}</el-tag>

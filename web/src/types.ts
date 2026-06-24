@@ -148,6 +148,8 @@ export interface SheetRow {
 export interface NotificationSettings {
   channel: 'dingtalk_robot' | 'feishu_robot';
   enabled: boolean;
+  dingtalkEnabled: boolean;
+  feishuEnabled: boolean;
   webhookUrl: string;
   secret: string;
   dingtalkWebhookUrl: string;
@@ -177,6 +179,12 @@ export interface NotificationLog {
   payload?: string;
   created_at: string;
   createdAtText?: string;
+}
+
+export interface NotificationSendResult {
+  channel: 'dingtalk_robot' | 'feishu_robot';
+  status: 'success' | 'failed';
+  message?: string;
 }
 
 export interface ApiUsageSummary {

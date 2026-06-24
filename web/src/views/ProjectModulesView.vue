@@ -45,7 +45,7 @@ const suppressSelectionWatch = ref(false);
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
   return rows.value.filter((row) => {
-    if (q && !Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(q))) return false;
+    if (q && !rowSearchValues(row).some((value) => value.toLowerCase().includes(q))) return false;
     if (filters.content.trim() && !String(row.content ?? '').toLowerCase().includes(filters.content.trim().toLowerCase())) return false;
     if (filters.isCompleted && !matchCompletedFilter(row.isCompleted, filters.isCompleted)) return false;
     if (!matchDateRange(row.plannedTestAt, filters.plannedTestAt)) return false;
@@ -106,9 +106,25 @@ function matchDateRange(value: unknown, range: string[]) {
 }
 
 function matchCompletedFilter(value: unknown, filterValue: string) {
-  const text = String(value ?? '').trim();
-  if (filterValue === '否') return text === '否' || text === '-' || text === '';
-  return text === filterValue;
+  return normalizeCompletionStatus(value) === filterValue;
+}
+
+function normalizeCompletionStatus(value: unknown) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['是', '已完成', '完成', 'true'].includes(text)) return '是';
+  return '否';
+}
+
+function displayCellValue(field: ModuleField, value: unknown) {
+  if (field.key === 'isCompleted') return normalizeCompletionStatus(value);
+  return String(value || '-');
+}
+
+function rowSearchValues(row: SheetRow) {
+  return Object.entries(row).map(([key, value]) => {
+    if (key === 'isCompleted') return normalizeCompletionStatus(value);
+    return String(value ?? '');
+  });
 }
 
 function clearFilters() {
@@ -307,7 +323,7 @@ onMounted(refreshAll);
             <a v-else-if="field.type === 'link' && row[field.key]" :href="String(row[field.key])" target="_blank" rel="noreferrer" class="table-link">
               {{ row[field.key] }}
             </a>
-            <span v-else>{{ row[field.key] || '-' }}</span>
+            <span v-else>{{ displayCellValue(field, row[field.key]) }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="canUpdate || canDelete" fixed="right" label="操作" width="128">

@@ -59,6 +59,7 @@ import {
   getNotificationSettings,
   getNotificationUserSettings,
   listNotificationLogs,
+  notificationChannelForUser,
   pushDashboardNotification,
   saveNotificationSettings,
   saveNotificationUserSettings,
@@ -905,6 +906,8 @@ router.get('/notification/settings', async (req, res, next) => {
         settings: {
           channel: settings.channel,
           enabled: settings.enabled,
+          dingtalkEnabled: settings.dingtalkEnabled,
+          feishuEnabled: settings.feishuEnabled,
           webhookUrl: settings.webhookUrl ? 'configured' : '',
           secret: settings.secret ? 'configured' : '',
           dingtalkWebhookUrl: settings.dingtalkWebhookUrl ? 'configured' : '',
@@ -958,6 +961,8 @@ router.put('/notification/settings', async (req, res, next) => {
     const parsed = z.object({
       channel: z.enum(['dingtalk_robot', 'feishu_robot']).default('dingtalk_robot'),
       enabled: z.boolean().default(false),
+      dingtalkEnabled: z.boolean().default(false),
+      feishuEnabled: z.boolean().default(false),
       webhookUrl: z.string().default(''),
       secret: z.string().default(''),
       dingtalkWebhookUrl: z.string().default(''),
@@ -1009,7 +1014,12 @@ router.post('/notification/push-dashboard', async (req, res, next) => {
       res.status(400).json({ message: '消息推送平台不正确' });
       return;
     }
-    res.json(await pushDashboardNotification(req.user!, 'manual', parsed.data.channel));
+    const userChannel = notificationChannelForUser(req.user!);
+    if (parsed.data.channel && parsed.data.channel !== userChannel) {
+      res.status(403).json({ message: '只能推送到当前登录平台对应的机器人' });
+      return;
+    }
+    res.json(await pushDashboardNotification(req.user!, 'manual', userChannel));
   } catch (error) {
     next(error);
   }
