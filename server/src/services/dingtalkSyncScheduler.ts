@@ -8,8 +8,6 @@ import { syncPlatformsToLocal } from './platformSync';
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 let lastSyncDate = '';
-let lastScheduledAttemptAt = 0;
-const SCHEDULED_RETRY_INTERVAL_MS = Number(process.env.PLATFORM_SYNC_RETRY_INTERVAL_MS || process.env.DINGTALK_SYNC_RETRY_INTERVAL_MS || 10 * 60 * 1000);
 
 function todayInShanghai() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
@@ -66,11 +64,9 @@ async function tick() {
   const today = todayInShanghai();
   const currentTime = timeInShanghai();
   if (lastSyncDate !== today && currentTime >= settings.scheduledTime) {
-    const now = Date.now();
-    if (lastScheduledAttemptAt && now - lastScheduledAttemptAt < SCHEDULED_RETRY_INTERVAL_MS) return;
-    lastScheduledAttemptAt = now;
-    const success = await runSync(`scheduled-${today}`);
-    if (success) {
+    try {
+      await runSync(`scheduled-${today}`);
+    } finally {
       lastSyncDate = today;
     }
   }
@@ -84,8 +80,8 @@ export function startDingTalkSyncScheduler() {
     .then((settings) => {
       if (settings.enabled && settings.startupSyncEnabled) {
         setTimeout(async () => {
-          const success = await runSync('startup');
-          if (success && timeInShanghai() >= settings.scheduledTime) {
+          await runSync('startup');
+          if (timeInShanghai() >= settings.scheduledTime) {
             lastSyncDate = todayInShanghai();
           }
         }, settings.startupDelayMs);
