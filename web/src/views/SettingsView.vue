@@ -1388,6 +1388,14 @@ onMounted(load);
             <el-table-column label="删除" width="100" align="center">
               <template #default="{ row }"><el-checkbox v-model="row.canDelete" :disabled="!row.canView" /></template>
             </el-table-column>
+            <el-table-column label="撤销完成" width="120" align="center">
+              <template #default="{ row }">
+                <el-checkbox
+                  v-model="row.canReopenCompleted"
+                  :disabled="permissionSubjectType !== 'user' || !row.canReopenCompletedAvailable || !row.canView"
+                />
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
       </el-tabs>

@@ -23,6 +23,7 @@ import {
 import {
   PermissionSubjectType,
   StaffRole,
+  UserRole,
   addAuditLog,
   all,
   copyDataSourceStaffAssignments,
@@ -55,6 +56,13 @@ import { authUrl, callbackUri, fetchOAuthIdentity, frontendCallbackUrl, frontend
 import { buildDashboardSummary } from './services/dashboardSummary';
 import { syncEnterpriseMembersForDingTalk } from './services/enterpriseMemberSync';
 import { isPlatformSyncRunning, syncPlatformsToLocal } from './services/platformSync';
+import {
+  REOPEN_COMPLETED_AUDIT_ACTION,
+  REOPEN_COMPLETED_LOCAL_PATCH,
+  REOPEN_COMPLETED_REASON_MIN_LENGTH,
+  REOPEN_COMPLETED_REQUIRED_FIELD_KEYS,
+  REOPEN_COMPLETED_SYNC_AUDIT_ACTION
+} from './config/reopenCompleted';
 import {
   getNotificationSettings,
   getNotificationUserSettings,
@@ -219,9 +227,24 @@ const permissionSchema = z.object({
     canView: z.boolean(),
     canCreate: z.boolean(),
     canUpdate: z.boolean(),
-    canDelete: z.boolean()
+    canDelete: z.boolean(),
+    canReopenCompleted: z.boolean().default(false)
   }))
 });
+
+const reopenCompletedSchema = z.object({
+  reason: z.string().trim().min(REOPEN_COMPLETED_REASON_MIN_LENGTH)
+});
+
+async function supportsReopenCompleted(module: ModuleConfig, selectedDataSourceId?: number) {
+  const fieldKeys = new Set(module.fields.map((field) => field.key));
+  if (module.category !== 'project'
+    || !REOPEN_COMPLETED_REQUIRED_FIELD_KEYS.every((fieldKey) => fieldKeys.has(fieldKey))) {
+    return false;
+  }
+  const dataSource = await getDataSource(moduleDataSourceId(module, selectedDataSourceId));
+  return dataSource?.platform === 'dingtalk';
+}
 
 async function modulePermission(user: NonNullable<Express.Request['user']>, module: ModuleConfig) {
   return getModulePermission({
@@ -233,13 +256,17 @@ async function modulePermission(user: NonNullable<Express.Request['user']>, modu
 
 // 把实际权限补到模块配置上，便于页面隐藏不可用操作。
 async function decorateModule(user: NonNullable<Express.Request['user']>, module: ModuleConfig) {
-  const permission = await modulePermission(user, module);
+  const [permission, canReopenCompletedAvailable] = await Promise.all([
+    modulePermission(user, module),
+    supportsReopenCompleted(module, user.dataSourceId)
+  ]);
   return {
     ...module,
     canView: permission.canView,
     canCreate: permission.canCreate,
     canUpdate: permission.canUpdate,
     canDelete: permission.canDelete,
+    canReopenCompleted: canReopenCompletedAvailable && permission.canReopenCompleted,
     canEdit: permission.canCreate || permission.canUpdate || permission.canDelete
   };
 }
@@ -247,6 +274,45 @@ async function decorateModule(user: NonNullable<Express.Request['user']>, module
 async function readableModules(user: NonNullable<Express.Request['user']>, modules: ModuleConfig[]) {
   const decorated = await Promise.all(modules.map((module) => decorateModule(user, module)));
   return decorated.filter((module) => module.canView);
+}
+
+async function buildPermissionResponse(
+  subjectType: PermissionSubjectType,
+  subjectId: string,
+  modules: ModuleConfig[],
+  selectedDataSourceId?: number
+) {
+  const targetUser = subjectType === 'user'
+    ? (await listUsers()).find((user) => String(user.id) === subjectId)
+    : undefined;
+  if (subjectType === 'user' && !targetUser) return undefined;
+
+  const role = subjectType === 'role' ? subjectId as UserRole : targetUser!.role;
+  const userId = subjectType === 'role' ? -1 : Number(subjectId);
+  const explicitRows = await listModulePermissions(subjectType, subjectId);
+  const explicitKeys = new Set(explicitRows.map((row) => row.module_key));
+
+  return Promise.all(modules.map(async (module) => {
+    const [permission, canReopenCompletedAvailable] = await Promise.all([
+      getModulePermission({
+        userId,
+        role,
+        module: { key: module.key, enabled: module.enabled, editable: module.editable }
+      }),
+      supportsReopenCompleted(module, selectedDataSourceId)
+    ]);
+    return {
+      moduleKey: module.key,
+      moduleTitle: module.title,
+      category: module.category,
+      explicit: explicitKeys.has(module.key),
+      canReopenCompletedAvailable,
+      ...permission,
+      canReopenCompleted: subjectType === 'user'
+        && canReopenCompletedAvailable
+        && permission.canReopenCompleted
+    };
+  }));
 }
 
 async function legacyStaffOptionsForDataSource(user: NonNullable<Express.Request['user']>) {
@@ -720,29 +786,11 @@ router.get('/permissions', async (req, res, next) => {
     }
 
     const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
-    const targetUser = subjectType === 'user' ? (await listUsers()).find((user) => String(user.id) === subjectId) : undefined;
-    if (subjectType === 'user' && !targetUser) {
+    const permissions = await buildPermissionResponse(subjectType, subjectId, modules, req.user!.dataSourceId);
+    if (!permissions) {
       res.status(404).json({ message: '用户不存在' });
       return;
     }
-    const role = subjectType === 'role' ? subjectId as any : targetUser!.role;
-    const userId = subjectType === 'role' ? -1 : Number(subjectId);
-    const explicitRows = await listModulePermissions(subjectType, subjectId);
-    const explicitKeys = new Set(explicitRows.map((row) => row.module_key));
-    const permissions = await Promise.all(modules.map(async (module) => {
-      const permission = await getModulePermission({
-        userId,
-        role,
-        module: { key: module.key, enabled: module.enabled, editable: module.editable }
-      });
-      return {
-        moduleKey: module.key,
-        moduleTitle: module.title,
-        category: module.category,
-        explicit: explicitKeys.has(module.key),
-        ...permission
-      };
-    }));
     res.json({ permissions });
   } catch (error) {
     next(error);
@@ -760,11 +808,42 @@ router.put('/permissions', async (req, res, next) => {
       res.status(400).json({ message: '权限配置不完整' });
       return;
     }
-    const permissions = await replaceModulePermissions(
+    if (parsed.data.subjectType === 'user') {
+      const targetUser = (await listUsers()).find((user) => String(user.id) === parsed.data.subjectId);
+      if (!targetUser) {
+        res.status(404).json({ message: '用户不存在' });
+        return;
+      }
+    }
+    const modules = await listModules({ enabledOnly: false, dataSourceId: req.user!.dataSourceId });
+    const reopenableModuleEntries = await Promise.all(modules.map(async (module) => ({
+      moduleKey: module.key,
+      available: await supportsReopenCompleted(module, req.user!.dataSourceId)
+    })));
+    const reopenableModuleKeys = new Set(
+      reopenableModuleEntries.filter((item) => item.available).map((item) => item.moduleKey)
+    );
+    await replaceModulePermissions(
       parsed.data.subjectType,
       parsed.data.subjectId,
-      parsed.data.permissions
+      parsed.data.permissions.map((permission) => ({
+        ...permission,
+        canReopenCompleted: parsed.data.subjectType === 'user'
+          && permission.canView
+          && reopenableModuleKeys.has(permission.moduleKey)
+          && permission.canReopenCompleted
+      }))
     );
+    const permissions = await buildPermissionResponse(
+      parsed.data.subjectType,
+      parsed.data.subjectId,
+      modules,
+      req.user!.dataSourceId
+    );
+    if (!permissions) {
+      res.status(404).json({ message: '用户不存在' });
+      return;
+    }
     res.json({ permissions });
   } catch (error) {
     next(error);
@@ -1047,6 +1126,7 @@ router.get('/notification/logs', async (req, res, next) => {
 router.get('/project-modules/:module/rows', getModuleRows);
 router.post('/project-modules/:module/rows', createModuleRow);
 router.put('/project-modules/:module/rows/:rowId', updateModuleRow);
+router.post('/project-modules/:module/rows/:rowId/reopen', reopenCompletedModuleRow);
 router.delete('/project-modules/:module/rows/:rowId', deleteModuleRow);
 router.get('/sheets/:module/rows', getModuleRows);
 router.post('/sheets/:module/rows', createModuleRow);
@@ -1308,6 +1388,7 @@ async function getModuleRows(req: any, res: any, next: any) {
       canCreate: decorated.canCreate,
       canUpdate: decorated.canUpdate,
       canDelete: decorated.canDelete,
+      canReopenCompleted: decorated.canReopenCompleted,
       cacheMeta: (rows as any).cacheMeta || null,
       rows
     });
@@ -1357,6 +1438,97 @@ async function updateModuleRow(req: any, res: any, next: any) {
     const row = await client.updateRow(module, req.params.rowId, payload, current);
     await addAuditLog({ userId: req.user.id, username: req.user.username, moduleKey: module.key, action: 'update', rowId: req.params.rowId, payload });
     res.json({ row });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/** 撤销已完成项目：仅清空上线日期并临时恢复未完成状态。 */
+async function reopenCompletedModuleRow(req: any, res: any, next: any) {
+  try {
+    const parsed = reopenCompletedSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: '撤销原因不能为空' });
+      return;
+    }
+
+    const module = await findModule(req.params.module);
+    if (!module) {
+      res.status(403).json({ message: '没有撤销完成权限' });
+      return;
+    }
+    const [permission, canReopenCompletedAvailable] = await Promise.all([
+      modulePermission(req.user, module),
+      supportsReopenCompleted(module, req.user.dataSourceId)
+    ]);
+    if (!canReopenCompletedAvailable || !permission.canReopenCompleted) {
+      res.status(403).json({ message: '没有撤销完成权限' });
+      return;
+    }
+
+    const dataSourceId = moduleDataSourceId(module, req.user.dataSourceId);
+    const dataSource = await getDataSource(dataSourceId);
+    if (!dataSource || dataSource.platform !== 'dingtalk') {
+      res.status(400).json({ message: '撤销完成当前仅支持钉钉项目数据' });
+      return;
+    }
+
+    const client = await getClientForModule(module, req.user.dataSourceId, req.user);
+    const rows = await client.getRows(module);
+    const current = rows.find((item: any) => item.id === req.params.rowId || String(item.rowNumber) === req.params.rowId);
+    if (!current) {
+      res.status(404).json({ message: '未找到要撤销完成的数据行' });
+      return;
+    }
+    if (!isOwnProjectRow(req.user, current)) {
+      res.status(403).json({ message: '只能撤销研发人员为自己的项目数据' });
+      return;
+    }
+    if (!isCompletedRow(current)) {
+      res.status(409).json({ message: '当前数据不是已完成状态，无需撤销' });
+      return;
+    }
+
+    if (isPlatformSyncRunning()) {
+      res.status(409).json({ message: '数据同步正在执行，请稍后再撤销完成' });
+      return;
+    }
+
+    const row = await client.updateRow(module, req.params.rowId, REOPEN_COMPLETED_LOCAL_PATCH, current);
+    await addAuditLog({
+      userId: req.user.id,
+      username: req.user.username,
+      moduleKey: module.key,
+      action: REOPEN_COMPLETED_AUDIT_ACTION,
+      rowId: req.params.rowId,
+      payload: {
+        reason: parsed.data.reason,
+        before: { launchAt: current.launchAt ?? '', isCompleted: current.isCompleted ?? '' },
+        after: REOPEN_COMPLETED_LOCAL_PATCH
+      }
+    });
+
+    void syncPlatformsToLocal({
+      dataSourceId,
+      moduleKey: module.key,
+      platforms: ['dingtalk']
+    }).then((result) => addAuditLog({
+      userId: req.user.id,
+      username: req.user.username,
+      moduleKey: module.key,
+      action: REOPEN_COMPLETED_SYNC_AUDIT_ACTION,
+      rowId: req.params.rowId,
+      payload: result
+    })).catch((error) => addAuditLog({
+      userId: req.user.id,
+      username: req.user.username,
+      moduleKey: module.key,
+      action: REOPEN_COMPLETED_SYNC_AUDIT_ACTION,
+      rowId: req.params.rowId,
+      payload: { failed: true, message: error instanceof Error ? error.message : String(error || '同步失败') }
+    }));
+
+    res.status(202).json({ row, message: '已提交撤销完成，正在同步到钉钉' });
   } catch (error) {
     next(error);
   }

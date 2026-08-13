@@ -52,6 +52,7 @@ export interface ModulePermissionRecord {
   can_create: number;
   can_update: number;
   can_delete: number;
+  can_reopen_completed: number;
 }
 
 export interface ModulePermissionInput {
@@ -60,6 +61,7 @@ export interface ModulePermissionInput {
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
+  canReopenCompleted: boolean;
 }
 
 export interface EnterpriseMemberInput {
@@ -401,11 +403,13 @@ export async function initDatabase() {
       can_create INTEGER NOT NULL DEFAULT 0,
       can_update INTEGER NOT NULL DEFAULT 0,
       can_delete INTEGER NOT NULL DEFAULT 0,
+      can_reopen_completed INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(subject_type, subject_id, module_key)
     )
   `);
+  await ensureColumn('module_permissions', 'can_reopen_completed', 'INTEGER NOT NULL DEFAULT 0');
 
   run(`
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -1021,17 +1025,23 @@ function defaultModulePermission(role: UserRole, module: { enabled: boolean; edi
     canView: module.enabled,
     canCreate: canEdit,
     canUpdate: canEdit,
-    canDelete: canEdit
+    canDelete: canEdit,
+    canReopenCompleted: false
   };
 }
 
-function normalizePermission(row: ModulePermissionRecord | undefined, fallback: ReturnType<typeof defaultModulePermission>) {
+function normalizePermission(
+  row: ModulePermissionRecord | undefined,
+  fallback: ReturnType<typeof defaultModulePermission>,
+  allowReopenCompleted: boolean
+) {
   if (!row) return fallback;
   return {
     canView: Boolean(row.can_view),
     canCreate: Boolean(row.can_create),
     canUpdate: Boolean(row.can_update),
-    canDelete: Boolean(row.can_delete)
+    canDelete: Boolean(row.can_delete),
+    canReopenCompleted: allowReopenCompleted && Boolean(row.can_reopen_completed)
   };
 }
 
@@ -1049,13 +1059,13 @@ export async function getModulePermission(input: {
     'SELECT * FROM module_permissions WHERE subject_type = ? AND subject_id = ? AND module_key = ?',
     ['user', String(input.userId), input.module.key]
   );
-  if (userPermission) return normalizePermission(userPermission, fallback);
+  if (userPermission) return normalizePermission(userPermission, fallback, true);
 
   const rolePermission = await get<ModulePermissionRecord>(
     'SELECT * FROM module_permissions WHERE subject_type = ? AND subject_id = ? AND module_key = ?',
     ['role', input.role, input.module.key]
   );
-  return normalizePermission(rolePermission, fallback);
+  return normalizePermission(rolePermission, fallback, false);
 }
 
 export async function listModulePermissions(subjectType: PermissionSubjectType, subjectId: string) {
@@ -1071,8 +1081,8 @@ export async function replaceModulePermissions(subjectType: PermissionSubjectTyp
     for (const permission of permissions) {
       run(
         `INSERT INTO module_permissions
-         (subject_type, subject_id, module_key, can_view, can_create, can_update, can_delete)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (subject_type, subject_id, module_key, can_view, can_create, can_update, can_delete, can_reopen_completed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           subjectType,
           subjectId,
@@ -1080,7 +1090,8 @@ export async function replaceModulePermissions(subjectType: PermissionSubjectTyp
           permission.canView ? 1 : 0,
           permission.canCreate ? 1 : 0,
           permission.canUpdate ? 1 : 0,
-          permission.canDelete ? 1 : 0
+          permission.canDelete ? 1 : 0,
+          subjectType === 'user' && permission.canView && permission.canReopenCompleted ? 1 : 0
         ]
       );
     }

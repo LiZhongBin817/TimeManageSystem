@@ -126,6 +126,7 @@ export interface ModuleConfig {
   canCreate?: boolean;
   canUpdate?: boolean;
   canDelete?: boolean;
+  canReopenCompleted?: boolean;
 }
 
 export interface ModulePermission {
@@ -133,10 +134,12 @@ export interface ModulePermission {
   moduleTitle: string;
   category: ModuleCategory;
   explicit?: boolean;
+  canReopenCompletedAvailable: boolean;
   canView: boolean;
   canCreate: boolean;
   canUpdate: boolean;
   canDelete: boolean;
+  canReopenCompleted: boolean;
 }
 
 export interface SheetRow {

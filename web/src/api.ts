@@ -221,12 +221,12 @@ export async function getSummary() {
 }
 
 export async function getRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; cacheMeta?: any; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; canReopenCompleted: boolean; cacheMeta?: Record<string, unknown>; rows: SheetRow[] }>(`/sheets/${moduleKey}/rows`);
   return data;
 }
 
 export async function getProjectRows(moduleKey: string) {
-  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; cacheMeta?: any; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
+  const { data } = await api.get<{ module: ModuleConfig; canEdit: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean; canReopenCompleted: boolean; cacheMeta?: Record<string, unknown>; rows: SheetRow[] }>(`/project-modules/${moduleKey}/rows`);
   return data;
 }
 
@@ -268,6 +268,11 @@ export async function updateRow(moduleKey: string, rowId: string, payload: Recor
 export async function updateProjectRow(moduleKey: string, rowId: string, payload: Record<string, unknown>) {
   const { data } = await api.put<{ row: SheetRow }>(`/project-modules/${moduleKey}/rows/${rowId}`, payload);
   return data.row;
+}
+
+export async function reopenCompletedProjectRow(moduleKey: string, rowId: string, reason: string) {
+  const { data } = await api.post<{ row: SheetRow; message: string }>(`/project-modules/${moduleKey}/rows/${rowId}/reopen`, { reason });
+  return data;
 }
 
 export async function deleteRow(moduleKey: string, rowId: string) {
@@ -314,7 +319,8 @@ export async function savePermissions(subjectType: PermissionSubjectType, subjec
       canView: item.canView,
       canCreate: item.canCreate,
       canUpdate: item.canUpdate,
-      canDelete: item.canDelete
+      canDelete: item.canDelete,
+      canReopenCompleted: subjectType === 'user' && item.canReopenCompleted
     }))
   });
   return data.permissions;

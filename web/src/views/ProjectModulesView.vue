@@ -1,6 +1,6 @@
 <!-- 项目模块导航页：列出可读项目模块，并引导用户进入通用模块视图。 -->
 <script setup lang="ts">
-import { Delete, Edit, Filter, Plus, Refresh, Search } from '@element-plus/icons-vue';
+import { Delete, Edit, Filter, Plus, Refresh, RefreshLeft, Search } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
@@ -10,9 +10,11 @@ import {
   getProjectModules,
   getProjectRows,
   getStaffOptions,
+  reopenCompletedProjectRow,
   updateProjectRow
 } from '../api';
 import type { ModuleConfig, ModuleField, SheetRow, User } from '../types';
+import { REOPEN_COMPLETED_REASON_MIN_LENGTH } from '../config/reopenCompleted';
 
 const loading = ref(false);
 const modules = ref<ModuleConfig[]>([]);
@@ -21,6 +23,7 @@ const moduleConfig = ref<ModuleConfig>();
 const canCreate = ref(false);
 const canUpdate = ref(false);
 const canDelete = ref(false);
+const canReopenCompleted = ref(false);
 const user = ref<User>();
 const rows = ref<SheetRow[]>([]);
 const keyword = ref('');
@@ -41,6 +44,7 @@ const form = reactive<Record<string, string | number>>({});
 const staffOptions = ref({ product: [] as string[], tester: [] as string[], developer: [] as string[] });
 const isRestrictedUser = computed(() => user.value?.role !== 'admin');
 const suppressSelectionWatch = ref(false);
+const reopeningRowId = ref('');
 
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
@@ -166,6 +170,7 @@ async function loadRows() {
     canCreate.value = data.canCreate;
     canUpdate.value = data.canUpdate;
     canDelete.value = data.canDelete;
+    canReopenCompleted.value = data.canReopenCompleted;
     rows.value = data.rows;
   } catch (error: any) {
     ElMessage.error(error.response?.data?.message || '数据加载失败');
@@ -263,6 +268,37 @@ async function remove(row: SheetRow) {
   }
 }
 
+async function reopenCompleted(row: SheetRow) {
+  if (!moduleConfig.value || !canReopenCompleted.value || !isCompletedRow(row)) return;
+
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '撤销后会清空上线日期，并重新同步到钉钉。',
+      '撤销完成',
+      {
+        type: 'warning',
+        confirmButtonText: '确认撤销',
+        cancelButtonText: '取消',
+        inputPlaceholder: '请输入撤销原因',
+        inputValidator: (inputValue) => String(inputValue || '').trim().length >= REOPEN_COMPLETED_REASON_MIN_LENGTH
+          ? true
+          : '撤销原因不能为空'
+      }
+    );
+    reopeningRowId.value = row.id;
+    const result = await reopenCompletedProjectRow(moduleConfig.value.key, row.id, String(value || '').trim());
+    ElMessage.success(result.message);
+    await loadRows();
+  } catch (error: unknown) {
+    const requestError = error as { response?: { data?: { message?: string } }; message?: string };
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(requestError.response?.data?.message || requestError.message || '撤销完成失败');
+    }
+  } finally {
+    reopeningRowId.value = '';
+  }
+}
+
 watch(selectedKey, () => {
   if (!suppressSelectionWatch.value) loadRows();
 });
@@ -326,10 +362,19 @@ onMounted(refreshAll);
             <span v-else>{{ displayCellValue(field, row[field.key]) }}</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canUpdate || canDelete" fixed="right" label="操作" width="128">
+        <el-table-column v-if="canUpdate || canDelete || canReopenCompleted" fixed="right" label="操作" width="144">
           <template #default="{ row }">
             <el-button v-if="canUpdate && !isCompletedRow(row)" :icon="Edit" circle @click="openEdit(row)" />
             <el-button v-if="canDelete && !isCompletedRow(row)" :icon="Delete" circle type="danger" @click="remove(row)" />
+            <el-tooltip v-if="canReopenCompleted && isCompletedRow(row)" content="撤销完成" placement="top">
+              <el-button
+                :icon="RefreshLeft"
+                :loading="reopeningRowId === row.id"
+                circle
+                type="warning"
+                @click="reopenCompleted(row)"
+              />
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
